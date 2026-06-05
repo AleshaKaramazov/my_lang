@@ -228,6 +228,13 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.code.push(Op::PushNumber(n));
             }
+            Token::Bool(b) => {
+                self.advance_token();
+                self.code.push(Op::PushBool(b));
+            }
+            Token::If => {
+                self.parse_if(true)?;
+            }
             Token::Ident(name) => self.parse_ident(name)?,
             Token::Begin => self.parse_block()?,
             Token::LParen => {
@@ -260,7 +267,7 @@ impl<'a> Compiler<'a> {
 
         self.expect(Token::Assign)?;
         self.parse_expression()?;
-        self.expect(Token::Semicolon)?;
+        self.next_if(Token::Semicolon);
 
         let var_id = self.next_slot;
         self.next_slot += 1;
@@ -285,7 +292,21 @@ impl<'a> Compiler<'a> {
             match self.current_token {
                 Token::Let => {
                     self.parse_let()?;
+                    has_expression_value = true;
+                }
+                Token::If => {
+                    self.parse_if(false)?;
                     has_expression_value = false;
+                }
+                Token::Begin => {
+                    self.parse_block()?;
+                    self.code.push(Op::Pop);
+                    has_expression_value = true;
+                }
+                Token::Ident(name) => {
+                    self.parse_ident(name)?; 
+                    self.next_if(Token::Semicolon);
+                    has_expression_value = true;
                 }
                 _ => {
                     self.parse_expression()?;
@@ -304,7 +325,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        self.expect(Token::End)?; 
+        self.next_if(Token::End);
 
         if !has_expression_value {
             self.code.push(Op::PushVoid);
@@ -407,24 +428,43 @@ impl<'a> Compiler<'a> {
         
         Ok(())
     }    
-    pub fn compile(mut self) -> Result<Vec<Op<'a>>, String> {
-        self.advance_token(); 
 
-        while self.current_token != Token::Eof {
-            match self.current_token {
-                Token::Let => self.parse_let()?,
-                Token::Begin => {
-                    self.parse_block()?;
-                    self.code.push(Op::Pop);
-                }
-                Token::Ident(name) => {
-                    self.parse_ident(name)?; 
-                    self.next_if(Token::Semicolon);
-                }
-                _ => return Err(format!("Unexpected token: {:?}", self.current_token)),
+    pub fn parse_if(&mut self, need_else: bool) -> Result<(), String> {
+        self.advance_token();
+        self.parse_if_branch()?;
+        
+        let mut has_else = false;
+        let mut vec = vec![self.add_plug(Op::Jump(0))];
+        while self.next_if(Token::Else) {
+            if self.next_if(Token::If) {
+                self.parse_if_branch()?;
+                vec.push(self.add_plug(Op::Jump(0)))
+            }
+            else {
+                has_else = true; 
+                self.parse_expression()?;
             }
         }
-         
+        for i in vec.iter() {
+            self.patch_plug(*i);
+        }       
+        if (need_else && !has_else) || (!has_else && self.current_token == Token::End) {
+            return Err("need else branch".to_string())
+        }
+        Ok(())
+    }
+
+    pub fn parse_if_branch(&mut self) -> Result<(), String> {
+        self.parse_expression()?;
+        let plug = self.add_plug(Op::JumpIfFalse(0));
+
+        self.parse_expression()?;
+        self.code[plug] = Op::JumpIfFalse(self.code.len() + 1);
+        Ok(())
+    }
+
+    pub fn compile(mut self) -> Result<Vec<Op<'a>>, String> {
+        self.parse_block()?;
         Ok(self.code)
     }
 }
