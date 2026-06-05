@@ -7,7 +7,7 @@ mod value;
 
 fn main() {
     let code = r#"
-        let q = "hello".len();
+        
     "#;
 
     let q = compiler::Compiler::new(code);

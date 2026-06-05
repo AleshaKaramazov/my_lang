@@ -19,6 +19,7 @@ impl<'a> VM<'a> {
             Op::PushStr(s) => self.stack.push(Value::Str(s)),
             Op::PushNumber(n) => self.stack.push(Value::Number(n)),
             Op::PushBool(b) => self.stack.push(Value::Bool(b)),
+            Op::PushRef(r) => self.stack.push(Value::Ref(r)),
             Op::PushVoid => self.stack.push(Value::Void),
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
@@ -106,6 +107,17 @@ impl<'a> VM<'a> {
         args.reverse();
 
         match func_name {
+            "len" => {
+                let res = match args[0] {
+                    Value::Str(s) => Value::Number(s.chars().count() as i64),
+                    Value::Ref(idx) => match self.frame[idx] {
+                        Value::Str(s) => Value::Number(s.chars().count() as i64),
+                        _ => return Err("can't get len".to_string()),
+                    }
+                    _ => return Err("can't get len".to_string()),
+                };
+                self.stack.push(res);
+            }
             "writeln" => {
                 print!("WRITEFUNC: ");
                 for (i, arg) in args.iter().enumerate() {
@@ -114,6 +126,7 @@ impl<'a> VM<'a> {
                         Value::Str(v) => print!("{}", v),
                         Value::Bool(v) => print!("{}", v),
                         Value::Void => print!("()"),
+                        _ => {},
                     }
                     if i < args.len() - 1 {
                         print!(" ");

@@ -237,6 +237,16 @@ impl<'a> Compiler<'a> {
             }
             _ => return Err(format!("Expected expression, got: {:?}", self.current_token)),
         }
+        while self.next_if(Token::Dot) {
+            let method_name = if let Token::Ident(n) = self.current_token {
+                self.advance_token();
+                n 
+            } else {
+                return Err(format!("Expected NAME, after DOT(.) got: {:?}", self.current_token));
+            };
+            self.expect(Token::LParen)?;
+            self.parse_func_call(method_name, true)?;
+        }
         Ok(())
     }
 
@@ -315,23 +325,36 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), String> {
+        let mut arg_count = 0;
+        if first_arg {
+            arg_count += 1;
+            let op = self.code.last_mut().unwrap();
+            match op {
+                Op::LoadLocal(i) => *op = Op::PushRef(*i),
+                _ => {},
+            } 
+        }
+        if self.current_token != Token::RParen {
+            loop {
+                self.parse_expression()?;
+                arg_count += 1;
+                if !self.next_if(Token::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(Token::RParen)?;
+        self.code.push(Op::PushStr(name));
+        self.code.push(Op::CallFunc(arg_count));
+        Ok(())
+    }
+
     pub fn parse_ident(&mut self, name: &'a str) -> Result<(), String> {
         self.advance_token(); 
         
         if self.next_if(Token::LParen) {
-            let mut arg_count = 0;
-            if self.current_token != Token::RParen {
-                loop {
-                    self.parse_expression()?;
-                    arg_count += 1;
-                    if !self.next_if(Token::Comma) {
-                        break;
-                    }
-                }
-            }
-            self.expect(Token::RParen)?;
-            self.code.push(Op::PushStr(name));
-            self.code.push(Op::CallFunc(arg_count));
+            self.parse_func_call(name,false)?;
             return Ok(());
         }
 

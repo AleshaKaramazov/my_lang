@@ -4,6 +4,7 @@
 pub enum Op<'a> {
     PushStr(&'a str),
     PushNumber(i64),
+    PushRef(usize),
     PushBool(bool),
     PushVoid,
     Pop,

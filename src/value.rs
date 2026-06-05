@@ -1,4 +1,3 @@
-
 use std::ops::{Add, Sub, Mul, Div};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -7,6 +6,7 @@ pub enum Value<'a> {
     Number(i64),
     Str(&'a str),
     Bool(bool),
+    Ref(usize),
 }
 
 impl<'a> Add for Value<'a> {
@@ -57,6 +57,7 @@ impl<'a> Value<'a> {
             Value::Bool(b) => *b,
             Value::Number(n) => *n != 0,
             Value::Str(s) => !s.is_empty(),
+            _ => false,
         }
     }
 
