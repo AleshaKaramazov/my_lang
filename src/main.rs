@@ -7,6 +7,9 @@ mod value;
 
 fn main() {
     let code = r#"
+        for i in "hello" {
+            writeln(i)
+        }
         
     "#;
 

@@ -1,11 +1,11 @@
 use crate::{op::Op, value::Value};
 
-pub struct VM<'a> {
-    stack: Vec<Value<'a>>,
-    frame: Vec<Value<'a>>,
+pub struct VM {
+    stack: Vec<Value>,
+    frame: Vec<Value>,
 }
 
-impl<'a> VM<'a> {
+impl<'a> VM {
     pub fn new() -> Self {
         Self {
             stack: Vec::with_capacity(32),
@@ -16,7 +16,8 @@ impl<'a> VM<'a> {
     #[inline(always)]
     pub fn step(&mut self, op: &Op<'a>, ip: &mut usize) -> Result<(), String> {
         match *op {
-            Op::PushStr(s) => self.stack.push(Value::Str(s)),
+            Op::PushStr(s) => self.stack.push(Value::Str(s.to_string())),
+            Op::PushChar(c) => self.stack.push(Value::Char(c)),
             Op::PushNumber(n) => self.stack.push(Value::Number(n)),
             Op::PushBool(b) => self.stack.push(Value::Bool(b)),
             Op::PushRef(r) => self.stack.push(Value::Ref(r)),
@@ -39,6 +40,20 @@ impl<'a> VM<'a> {
                 };
                 self.stack.push(result);
             }
+            Op::Equal | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
+                let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                
+                let result = match *op {
+                    Op::Equal => left == right,
+                    Op::Greater => left > right,
+                    Op::Less => left < right,
+                    Op::GreaterEq => left >= right,
+                    Op::LessEq => left <= right,
+                    _ => unreachable!(),
+                };
+                self.stack.push(Value::Bool(result));
+            }
             Op::Swap => {
                 let len = self.stack.len();
                 if len < 2 {
@@ -49,6 +64,20 @@ impl<'a> VM<'a> {
             Op::Dup => {
                 let val = self.stack.last().ok_or("VM Error: Stack underflow on Dup")?.clone();
                 self.stack.push(val);
+            }
+            Op::MakeIter => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow on MakeIter")?;
+                self.stack.push(val.make_iter()?);
+            }
+            Op::IterNext(i) => {
+                let val = self.stack.last_mut().unwrap().next();
+                match val {
+                    Some(val) => self.stack.push(val),
+                    None => {
+                        *ip = i;
+                        return Ok(()); 
+                    }
+                }
             }
             Op::Not => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
@@ -106,11 +135,11 @@ impl<'a> VM<'a> {
         }
         args.reverse();
 
-        match func_name {
+        match func_name.as_str() {
             "len" => {
-                let res = match args[0] {
+                let res = match &args[0] {
                     Value::Str(s) => Value::Number(s.chars().count() as i64),
-                    Value::Ref(idx) => match self.frame[idx] {
+                    Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Str(s) => Value::Number(s.chars().count() as i64),
                         _ => return Err("can't get len".to_string()),
                     }
@@ -121,13 +150,7 @@ impl<'a> VM<'a> {
             "writeln" => {
                 print!("WRITEFUNC: ");
                 for (i, arg) in args.iter().enumerate() {
-                    match arg {
-                        Value::Number(v) => print!("{}", v),
-                        Value::Str(v) => print!("{}", v),
-                        Value::Bool(v) => print!("{}", v),
-                        Value::Void => print!("()"),
-                        _ => {},
-                    }
+                    print!("{}", arg);
                     if i < args.len() - 1 {
                         print!(" ");
                     }

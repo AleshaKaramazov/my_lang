@@ -48,8 +48,51 @@ impl<'a> Compiler<'a> {
             Op::JumpIfFalse(_) => self.code[index] = Op::JumpIfFalse(target),
             Op::JumpIfTrue(_) => self.code[index] = Op::JumpIfTrue(target),
             Op::Jump(_) => self.code[index] = Op::Jump(target),
+            Op::IterNext(_) => self.code[index] = Op::IterNext(target),
             _ => unreachable!("VM Error: Attempted to patch a non-jump instruction!"),
         }
+    }
+
+    pub fn parse_for(&mut self) -> Result<(), String> {
+        self.advance_token(); 
+        
+        let loop_var = match self.current_token {
+            Token::Ident(name) => name,
+            _ => return Err("Expected identifier after 'for'".to_string()),
+        };
+        self.advance_token();
+        
+        self.expect(Token::In)?; 
+        
+        self.parse_expression()?;     
+        self.code.push(Op::MakeIter); 
+        
+        let loop_start = self.code.len();
+        let exit_jump = self.add_plug(Op::IterNext(0)); 
+        
+        let var_id = self.next_slot;
+        self.next_slot += 1;
+        let old_val = self.variables.insert(loop_var, var_id);
+        
+        self.code.push(Op::StoreLocal(var_id));
+        
+        self.parse_block()?;
+        
+        self.code.push(Op::Pop); 
+        
+        self.code.push(Op::Jump(loop_start));
+        
+        self.patch_plug(exit_jump);
+        
+        self.code.push(Op::Pop);
+        if let Some(prev) = old_val {
+            self.variables.insert(loop_var, prev);
+        } else {
+            self.variables.remove(loop_var);
+        }
+        self.next_slot -= 1;
+        
+        Ok(())
     }
 
     fn expect(&mut self, token: Token) -> Result<(), String> {
@@ -87,14 +130,14 @@ impl<'a> Compiler<'a> {
     }
 
     fn parse_logical_and(&mut self) -> Result<(), String> {
-        self.parse_arifm_or()?;
+        self.parse_equality()?; 
 
         while self.current_token == Token::LogicalAnd { 
             self.advance_token();
 
             let jump_false_1 = self.add_plug(Op::JumpIfFalse(0));
             
-            self.parse_arifm_or()?;
+            self.parse_equality()?; 
             
             let jump_false_2 = self.add_plug(Op::JumpIfFalse(0));
 
@@ -110,6 +153,47 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    fn parse_equality(&mut self) -> Result<(), String> {
+        self.parse_relational()?;
+
+        while self.current_token == Token::Equal { 
+            self.advance_token();
+            self.parse_relational()?;
+            self.code.push(Op::Equal);
+        }
+        Ok(())
+    }
+
+    fn parse_relational(&mut self) -> Result<(), String> {
+        self.parse_arifm_or()?;
+
+        loop {
+            match self.current_token {
+                Token::Greater => { 
+                    self.advance_token();
+                    self.parse_arifm_or()?;
+                    self.code.push(Op::Greater);
+                }
+                Token::Less => { 
+                    self.advance_token();
+                    self.parse_arifm_or()?;
+                    self.code.push(Op::Less);
+                }
+                Token::GreaterOrEqual => { 
+                    self.advance_token();
+                    self.parse_arifm_or()?;
+                    self.code.push(Op::GreaterEq);
+                }
+                Token::LessOrEqual => { 
+                    self.advance_token();
+                    self.parse_arifm_or()?;
+                    self.code.push(Op::LessEq);
+                }
+                _ => break,
+            }
+        }
+        Ok(())
+    }
     fn parse_arifm_or(&mut self) -> Result<(), String> {
         self.parse_arifm_and()?;
         while self.current_token == Token::ArifmOr {
@@ -224,6 +308,10 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.code.push(Op::PushStr(s));
             }
+            Token::Char(c) => {
+                self.advance_token();
+                self.code.push(Op::PushChar(c));
+            }
             Token::Number(n) => {
                 self.advance_token();
                 self.code.push(Op::PushNumber(n));
@@ -292,10 +380,18 @@ impl<'a> Compiler<'a> {
             match self.current_token {
                 Token::Let => {
                     self.parse_let()?;
-                    has_expression_value = true;
+                    has_expression_value = false;
                 }
                 Token::If => {
                     self.parse_if(false)?;
+                    has_expression_value = true;
+                }
+                Token::For => {
+                    self.parse_for()?;
+                    has_expression_value = false;
+                }
+                Token::While => {
+                    self.parse_while()?;
                     has_expression_value = false;
                 }
                 Token::Begin => {
@@ -427,7 +523,22 @@ impl<'a> Compiler<'a> {
         }
         
         Ok(())
-    }    
+    } 
+
+    pub fn parse_while(&mut self) -> Result<(), String> {
+        self.advance_token();
+        
+        let jump_index = self.code.len();
+        self.parse_expression()?;
+        let plug = self.add_plug(Op::JumpIfFalse(0));
+
+        self.parse_block()?;
+        self.code.push(Op::Pop);
+        self.code.push(Op::Jump(jump_index));
+
+        self.patch_plug(plug);
+        Ok(()) 
+    }
 
     pub fn parse_if(&mut self, need_else: bool) -> Result<(), String> {
         self.advance_token();

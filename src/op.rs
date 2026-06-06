@@ -3,6 +3,7 @@
 #[derive(Debug, Clone, Copy)]
 pub enum Op<'a> {
     PushStr(&'a str),
+    PushChar(char),
     PushNumber(i64),
     PushRef(usize),
     PushBool(bool),
@@ -24,4 +25,13 @@ pub enum Op<'a> {
     Mult,
     Pow,
     Div,
+
+    MakeIter,
+    IterNext(usize),
+
+    Equal,
+    Greater,
+    Less,
+    GreaterEq,
+    LessEq,
 }
