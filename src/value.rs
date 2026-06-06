@@ -105,7 +105,7 @@ impl<'a> Value {
         Ok(val)
     }
 
-     pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), String> {
+    pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), String> {
         let index = index.expect_number()? as usize;
         match self {
             Value::Set(v) => v[index] = to_set,
@@ -173,6 +173,13 @@ impl<'a> Value {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a | b)),
             _ => Err("Runtime Error: Invalid types for ArifmOr".to_string()),
+        }
+    }
+
+    pub fn arifm_mod(self, rhs: Self) -> Result<Value, String> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a % b)),
+            _ => Err("Runtime Error: Invalid types for Mod".to_string()),
         }
     }
 

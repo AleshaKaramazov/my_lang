@@ -36,7 +36,7 @@ impl<'a> VM {
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
             }
-            Op::Plus | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
+            Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
                 let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 let result = match *op {
@@ -47,6 +47,7 @@ impl<'a> VM {
                     Op::Pow => left.pow(right)?,
                     Op::ArifmAnd => left.arifm_and(right)?,
                     Op::ArifmOr => left.arifm_or(right)?,
+                    Op::Mod => left.arifm_mod(right)?,
                     _ => unreachable!(),
                 };
                 self.stack.push(result);
@@ -263,6 +264,18 @@ impl<'a> VM {
                                     _ => return Err("can't get len".to_string()),
                                 };
                                 self.stack.push(res);
+                            }
+                            "push" => {
+                                let id = match &args[0] {
+                                    Value::Ref(idx) => *idx,
+                                    _ => return Ok(()),
+                                };
+
+                                match &mut self.frame[id] {
+                                    Value::Set(set) => set.push(args[1].clone()),
+                                    _ => return Err("can't push".to_string()),
+                                }
+                                self.stack.push(Value::Void);
                             }
                             "step" => {
                                 let mut arg = if let Value::Range(i) = &args[0] {

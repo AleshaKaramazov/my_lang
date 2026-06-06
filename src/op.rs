@@ -31,6 +31,7 @@ pub enum Op<'a> {
     Mult,
     Pow,
     Div,
+    Mod,
     MakeSet(usize),
     MakeIter,
     IterNext(usize),

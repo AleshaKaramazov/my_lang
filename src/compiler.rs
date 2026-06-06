@@ -85,9 +85,7 @@ impl<'a> Compiler<'a> {
         self.parse_block()?;
         
         self.code.push(Op::Pop); 
-        
         self.code.push(Op::Jump(loop_start));
-        
         self.patch_plug(exit_jump);
         
         self.code.push(Op::Pop);
@@ -267,10 +265,11 @@ impl<'a> Compiler<'a> {
     fn parse_power(&mut self) -> Result<(), String> {
         self.parse_unary()?;
 
-        if self.current_token == Token::Pow {
+        if self.current_token == Token::Pow || self.current_token == Token::Mod {
+            let oper = if self.next_if(Token::Pow) {Op::Pow} else {Op::Mod};
             self.advance_token();
             self.parse_power()?;
-            self.code.push(Op::Pow);
+            self.code.push(oper);
         }
         Ok(())
     }
@@ -630,7 +629,7 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn parse_block(&mut self) -> Result<(), String> {
-        self.expect(Token::Begin)?; 
+        let was_open = self.next_if(Token::Begin);
 
         let old_next_slot = self.next_slot;
         let start_change_idx = self.scope_changes.len();
@@ -679,16 +678,18 @@ impl<'a> Compiler<'a> {
                         has_expression_value = false;
                     } else {
                         has_expression_value = true;
-                        if self.current_token != Token::End {
-                            return Err("Expected ';' after expression or end of block".to_string());
+                        if !matches!(self.current_token, Token::End | Token::Eof) && was_open {
+                            return Err(format!("Expected ';' after expression or end of block, got: {:?}", self.current_token));
                         }
                         break;
                     }
                 }
             }
+
+            if !was_open {break;}
         }
 
-        self.next_if(Token::End);
+        if was_open && self.current_token != Token::Eof {self.expect(Token::End)?};
 
         if !has_expression_value {
             self.code.push(Op::PushVoid);
@@ -913,15 +914,22 @@ impl<'a> Compiler<'a> {
             }
             else {
                 has_else = true; 
-                self.parse_expression()?;
+                self.parse_block()?;
             }
         }
+
+        if !has_else {
+            if need_else || self.current_token == Token::End {
+                return Err("need else branch".to_string())
+            } else {
+                self.code.push(Op::PushVoid);
+            }
+        }
+
         for i in vec.iter() {
             self.patch_plug(*i);
-        }       
-        if (need_else && !has_else) || (!has_else && self.current_token == Token::End) {
-            return Err("need else branch".to_string())
-        }
+        }  
+
         Ok(())
     }
 
@@ -929,7 +937,7 @@ impl<'a> Compiler<'a> {
         self.parse_expression()?;
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
-        self.parse_expression()?;
+        self.parse_block()?;
         self.code[plug] = Op::JumpIfFalse(self.code.len() + 1);
         Ok(())
     }
