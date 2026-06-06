@@ -10,6 +10,7 @@ pub enum Op<'a> {
     PushVoid,
     Pop,
     Dup,
+    DupTarget(usize),
     Swap,
     MakeRange(bool),
     StoreLocal(usize),
@@ -26,10 +27,11 @@ pub enum Op<'a> {
     Mult,
     Pow,
     Div,
-
+    MakeSet(usize),
     MakeIter,
     IterNext(usize),
-
+    LoadIndex(usize),
+    StoreIndex(usize),
     Equal,
     Greater,
     Less,

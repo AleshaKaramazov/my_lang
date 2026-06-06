@@ -12,6 +12,7 @@ pub enum Value {
     Ref(usize),
     Range(Range),
     Iter(Iterator),
+    Set(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -24,12 +25,14 @@ pub struct Range {
 #[derive(Debug, Clone)]
 pub enum Iterator {
     String(IntoIter<char>),
+    Set(IntoIter<Value>),
     Range(Range)
 }
 
 impl Iterator {
     fn next(&mut self) -> Option<Value> {
         match self {
+            Self::Set(i) => i.next(),
             Self::String(s) => s.next().map(|x| Value::Char(x)),
             Iterator::Range(range) => {
                 let current = range.start;
@@ -91,11 +94,69 @@ impl<'a> Value {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
                 Value::Iter(Iterator::String(iter))
             }
+            Self::Set(i) => Value::Iter(Iterator::Set(i.into_iter())),
             Self::Range(range) => Value::Iter(Iterator::Range(range)),
             _ => return Err(format!("Can't eval Iterator from: {}", self)),
         };
 
         Ok(val)
+    }
+
+     pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), String> {
+        let index = index.expect_number()? as usize;
+        match self {
+            Value::Set(v) => v[index] = to_set,
+            _ => return Err("can't eval index".to_string())
+        }
+        Ok(())
+    }
+
+    pub fn load_index(&self, index: Self) -> Result<Value, String> {
+        let index = index.expect_number()? as usize;
+        match self {
+            Value::Set(v) => Ok(v[index].clone()),
+            _ => return Err("can't eval index".to_string())
+        }
+    }
+
+    pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), String> {
+        let mut current = self;
+
+        for i in 0..index.len() - 1 {
+            let idx = index[i].expect_number()? as usize;
+            match current {
+                Value::Set(v) => {
+                    current = &mut v[idx];
+                }
+                _ => return Err("Cannot index into a non-set value".to_string()),
+            }
+        }
+
+        let last_idx = index.last().unwrap().expect_number()? as usize;
+        match current {
+            Value::Set(v) => {
+                v[last_idx] = to_set;
+            }
+            _ => return Err("Cannot assign: target is not a set".to_string()),
+        }
+
+        Ok(())
+    }
+
+    pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, String> {
+        let mut current = self;
+
+        for i in index.iter() {
+            let idx = i.expect_number()? as usize;
+            match current {
+                Value::Set(v) => {
+                    current = &v[idx];
+                }
+                _ => return Err("Cannot load index: not a set".to_string()),
+            }
+        }
+
+        Ok(current.clone())
     }
 
     pub fn arifm_and(self, rhs: Self) -> Result<Value, String> {
@@ -136,7 +197,14 @@ impl std::fmt::Display for Value {
             Self::Str(s) => write!(f, "{}", s),
             Self::Range(s) => write!(f, "{}..{}", s.start, s.end),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
-            Self::Iter(i) => write!(f, "Iter<{:?}>", i)
+            Self::Iter(i) => write!(f, "Iter<{:?}>", i),
+            Self::Set(s) => {
+                write!(f, "[ ")?;
+                for i in s {
+                    write!(f, "{}, ", i)?;
+                }
+                write!(f, "]")
+            }
         } 
     }
 }

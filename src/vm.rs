@@ -99,12 +99,57 @@ impl<'a> VM {
                     return Ok(());
                 }
             }
+            Op::MakeSet(i) => {
+                let start_idx = self.stack.len() - i;
+                let vals: Vec<Value> = self.stack.drain(start_idx..).collect();
+                self.stack.push(Value::Set(vals)); 
+            }
             Op::JumpIfTrue(target) => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 if val.is_truthy() {
                     *ip = target;
                     return Ok(());
                 }
+            }
+            Op::DupTarget(deep) => {
+                let len = self.stack.len();
+                let start = len - (1 + deep); 
+                let mut to_dup = vec![];
+                for i in start..len {
+                    to_dup.push(self.stack[i].clone());
+                }
+                self.stack.extend(to_dup);
+            }
+            Op::StoreIndex(count) => {
+                let to_set = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreIndex".to_string())?;
+                
+                if count > 1 {
+                    let index_start = self.stack.len() - count;
+                    let indexes: Vec<Value> = self.stack.drain(index_start..).collect();
+                    let mut target = self.stack.pop().ok_or_else(|| "VM Error: No target for StoreIndex".to_string())?;
+                    
+                    target.set_index_deep(indexes, to_set)?;
+                    self.stack.push(target); 
+                } else {
+                    let index = self.stack.pop().ok_or_else(|| "VM Error: No index for StoreIndex".to_string())?;
+                    let mut target = self.stack.pop().ok_or_else(|| "VM Error: No target for StoreIndex".to_string())?;
+                    
+                    target.set_index(index, to_set)?;
+                    self.stack.push(target); 
+                }
+            }
+            Op::LoadIndex(count) => {
+                let res = if count > 1 {
+                    let index = self.stack.len() - count;
+                    let indexes: Vec<Value> = self.stack.drain(index..).collect();
+                    let value = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
+                    value.load_index_deep(indexes)?
+                } else {
+                    let index = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
+                    let value = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
+                    value.load_index(index)?
+                };
+                self.stack.push(res); 
             }
             Op::StoreLocal(idx) => {
                 let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;

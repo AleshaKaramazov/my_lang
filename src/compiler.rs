@@ -276,35 +276,55 @@ impl<'a> Compiler<'a> {
                 self.parse_unary()?; 
                 self.code.push(Op::Not);
             }
-            Token::Inc => {
+            Token::Inc | Token::Dec => {
+                let is_inc = self.current_token == Token::Inc;
+                let op = if is_inc { Op::Plus } else { Op::Sub };
                 self.advance_token();
+                
                 let name = match self.current_token {
                     Token::Ident(n) => n,
-                    _ => return Err("Expected identifier after prefix '++'".to_string()),
+                    _ => return Err(format!("Expected identifier after prefix '{}'", if is_inc { "++" } else { "--" })),
                 };
                 self.advance_token();
+                
                 let var_id = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
                 
-                self.code.push(Op::LoadLocal(var_id));
-                self.code.push(Op::PushNumber(1));
-                self.code.push(Op::Plus);
-                self.code.push(Op::Dup);
-                self.code.push(Op::StoreLocal(var_id));
-            }
-            Token::Dec => {
-                self.advance_token();
-                let name = match self.current_token {
-                    Token::Ident(n) => n,
-                    _ => return Err("Expected identifier after prefix '--'".to_string()),
+                let store_var = if self.current_token == Token::LBracket {
+                    let mut deep: usize = 0;
+                    self.code.push(Op::LoadLocal(var_id));
+                    while self.next_if(Token::LBracket) {
+                        deep += 1;
+                        self.parse_expression()?;
+                        self.expect(Token::RBracket)?;
+                    }
+                    deep
+                } else {
+                    0
                 };
-                self.advance_token();
-                let var_id = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
-                
-                self.code.push(Op::LoadLocal(var_id));
-                self.code.push(Op::PushNumber(1));
-                self.code.push(Op::Sub);
-                self.code.push(Op::Dup);
-                self.code.push(Op::StoreLocal(var_id));
+
+                if store_var != 0 {
+                    self.code.push(Op::DupTarget(store_var)); 
+                    self.code.push(Op::LoadIndex(store_var)); 
+                    
+                    self.code.push(Op::PushNumber(1));
+                    self.code.push(op);                       
+                    let temp_slot = self.next_slot;
+                    self.next_slot += 1;
+                    
+                    self.code.push(Op::Dup);                  
+                    self.code.push(Op::StoreLocal(temp_slot));
+                    
+                    self.code.push(Op::StoreIndex(store_var));
+                    self.code.push(Op::StoreLocal(var_id));  
+                    
+                    self.code.push(Op::LoadLocal(temp_slot)); 
+                } else {
+                    self.code.push(Op::LoadLocal(var_id));
+                    self.code.push(Op::PushNumber(1));
+                    self.code.push(op);
+                    self.code.push(Op::Dup);
+                    self.code.push(Op::StoreLocal(var_id));
+                }
             }
             _ => {
                 self.parse_primary()?;
@@ -313,6 +333,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+   
     fn parse_primary(&mut self) -> Result<(), String> {
         match self.current_token {
             Token::String(s) => {
@@ -322,6 +343,16 @@ impl<'a> Compiler<'a> {
             Token::Char(c) => {
                 self.advance_token();
                 self.code.push(Op::PushChar(c));
+            }
+            Token::LBracket => {
+                self.advance_token();
+                let mut arg_count = 0;
+                while !self.next_if(Token::RBracket) {
+                    arg_count += 1;
+                    self.parse_expression()?;
+                    self.next_if(Token::Comma);
+                }
+                self.code.push(Op::MakeSet(arg_count))
             }
             Token::Number(n) => {
                 self.advance_token();
@@ -342,6 +373,17 @@ impl<'a> Compiler<'a> {
                 self.expect(Token::RParen)?;
             }
             _ => return Err(format!("Expected expression, got: {:?}", self.current_token)),
+        }
+        if self.next_if(Token::LBracket) {
+            self.parse_expression()?;
+            self.expect(Token::RBracket)?;
+            let mut arg_count = 1;
+            while self.next_if(Token::LBracket) {
+                arg_count+=1; 
+                self.parse_expression()?;
+                self.expect(Token::RBracket)?;
+            }
+            self.code.push(Op::LoadIndex(arg_count));
         }
         while self.next_if(Token::Dot) {
             let method_name = if let Token::Ident(n) = self.current_token {
@@ -482,17 +524,35 @@ impl<'a> Compiler<'a> {
         self.advance_token(); 
         
         if self.next_if(Token::LParen) {
-            self.parse_func_call(name,false)?;
+            self.parse_func_call(name, false)?;
             return Ok(());
         }
 
         let var_id = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
 
+        let store_var = if self.current_token == Token::LBracket {
+            let mut deep: usize = 0;
+            self.code.push(Op::LoadLocal(var_id));
+            while self.next_if(Token::LBracket) {
+                deep += 1;
+                self.parse_expression()?;
+                self.expect(Token::RBracket)?;
+            }
+            deep
+        } else {
+            0
+        };
+
         match self.current_token {
             Token::Assign => {
                 self.advance_token();
-                self.parse_expression()?; 
-                self.code.push(Op::StoreLocal(var_id));
+                self.parse_expression()?;
+                if store_var != 0 {
+                    self.code.push(Op::StoreIndex(store_var));
+                    self.code.push(Op::StoreLocal(var_id));
+                } else {
+                    self.code.push(Op::StoreLocal(var_id));
+                }
                 self.code.push(Op::PushVoid);
             }
             Token::AssignOper(id) => {
@@ -506,36 +566,59 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 
-                self.code.push(Op::LoadLocal(var_id)); 
-                self.parse_expression()?;              
-                self.code.push(op);                    
-                self.code.push(Op::StoreLocal(var_id));
+                if store_var != 0 {
+                    self.code.push(Op::DupTarget(store_var));
+                    self.code.push(Op::LoadIndex(store_var));
+                    self.parse_expression()?;              
+                    self.code.push(op);                    
+                    self.code.push(Op::StoreIndex(store_var));
+                    self.code.push(Op::StoreLocal(var_id));
+                } else {
+                    self.code.push(Op::LoadLocal(var_id)); 
+                    self.parse_expression()?;              
+                    self.code.push(op);                    
+                    self.code.push(Op::StoreLocal(var_id));
+                }
                 self.code.push(Op::PushVoid);
             }
-            Token::Inc => {
+            Token::Inc | Token::Dec => {
+                let is_inc = self.current_token == Token::Inc;
+                let op = if is_inc { Op::Plus } else { Op::Sub };
                 self.advance_token();
-                self.code.push(Op::LoadLocal(var_id));
-                self.code.push(Op::Dup); 
-                self.code.push(Op::PushNumber(1));
-                self.code.push(Op::Plus);
-                self.code.push(Op::StoreLocal(var_id));
-            }
-            Token::Dec => {
-                self.advance_token();
-                self.code.push(Op::LoadLocal(var_id));
-                self.code.push(Op::Dup);
-                self.code.push(Op::PushNumber(1));
-                self.code.push(Op::Sub);
-                self.code.push(Op::StoreLocal(var_id));
+
+                if store_var != 0 {
+                    self.code.push(Op::DupTarget(store_var));
+                    self.code.push(Op::DupTarget(store_var));
+                    
+                    self.code.push(Op::LoadIndex(store_var)); 
+                    
+                    self.code.push(Op::PushNumber(1));
+                    self.code.push(op);
+                    
+                    self.code.push(Op::StoreIndex(store_var));
+                    self.code.push(Op::StoreLocal(var_id));
+                    
+                    self.code.push(Op::LoadIndex(store_var));
+                } else {
+                    self.code.push(Op::LoadLocal(var_id));
+                    self.code.push(Op::Dup); 
+                    self.code.push(Op::PushNumber(1));
+                    self.code.push(op);
+                    self.code.push(Op::StoreLocal(var_id));
+                }
             }
             _ => {
-                self.code.push(Op::LoadLocal(var_id));
+                if store_var != 0 {
+                    self.code.push(Op::LoadIndex(store_var));
+                } else {
+                    self.code.push(Op::LoadLocal(var_id));
+                }
             }
         }
         
         Ok(())
-    } 
-
+    }
+    
     pub fn parse_while(&mut self) -> Result<(), String> {
         self.advance_token();
         
