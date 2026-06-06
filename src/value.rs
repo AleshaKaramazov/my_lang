@@ -14,6 +14,8 @@ pub enum Value {
     Iter(Iterator),
     Fn(usize),
     Set(Vec<Value>),
+    Result(Box<Result<Value, Value>>),
+    Cat(Option<Box<Value>>),
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +202,17 @@ impl std::fmt::Display for Value {
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
             Self::Fn(i) => write!(f, "FN<ID: {}>", i),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),
+            Value::Cat(c) => if let Some(c) = c {
+                write!(f, "Cat<{}>", c)
+            } else {
+                write!(f, "None")
+            }
+            Value::Result(res) => {
+                match &**res {
+                    Ok(res) => write!(f, "Ok<{}>", res),
+                    Err(err) => write!(f, "Err<{}>", err)
+                } 
+            }
             Self::Set(s) => {
                 write!(f, "[ ")?;
                 for i in s {

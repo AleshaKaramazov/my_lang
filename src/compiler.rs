@@ -371,6 +371,73 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.code.push(Op::PushStr(s));
             }
+            Token::Ok | Token::Some | Token::Err => {
+                let oper = match self.current_token {
+                    Token::Ok => Op::MakeOk,
+                    Token::Err => Op::MakeErr,
+                    Token::Some => Op::MakeSome,
+                    _ => unreachable!()
+                };
+                self.advance_token();
+                self.expect(Token::LParen)?;
+                self.parse_expression()?;
+                self.code.push(oper);
+                self.expect(Token::RParen)?;
+            }
+            Token::Let => {
+                self.advance_token();
+                let is_right = match self.current_token {
+                    Token::Ok | Token::Some => true,
+                    Token::Err => false,
+                    _ => return Err("Expected Ok, Some or Err".to_string()),
+                };
+                self.advance_token();
+                self.expect(Token::LParen)?;
+                let name = match self.current_token {
+                    Token::Ident(n) => n,
+                    _ => return Err("Expected identifier".to_string()),
+                };
+                self.advance_token();
+                self.expect(Token::RParen)?;
+                self.expect(Token::Assign)?;
+                self.parse_expression()?;
+
+                let fail_jump = self.code.len();
+                if is_right {
+                    self.code.push(Op::SafeUnwR(0));
+                } else {
+                    self.code.push(Op::SafeUnwL(0));
+                }
+
+                let var_id = self.next_slot;
+                self.next_slot += 1;
+
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth));
+                self.scope_changes.push((name, old_val));
+
+                if self.scope_depth == 0 {
+                    self.code.push(Op::StoreGlobal(var_id));
+                } else {
+                    self.code.push(Op::StoreLocal(var_id));
+                }
+
+                self.code.push(Op::PushBool(true));
+                let end_jump = self.add_plug(Op::Jump(0));
+
+                let target = self.code.len();
+                if is_right {
+                    self.code[fail_jump] = Op::SafeUnwR(target);
+                } else {
+                    self.code[fail_jump] = Op::SafeUnwL(target);
+                }
+
+                self.code.push(Op::PushBool(false));
+                self.patch_plug(end_jump);
+            }
+            Token::None => {
+                self.advance_token();
+                self.code.push(Op::None)
+            }
             Token::Char(c) => {
                 self.advance_token();
                 self.code.push(Op::PushChar(c));
@@ -617,8 +684,8 @@ impl<'a> Compiler<'a> {
             arg_count += 1;
             let op = self.code.last_mut().unwrap();
             match op {
-                Op::LoadLocal(i) => *op = Op::PushRef(*i),
-                Op::LoadGlobal(i) => *op = Op::PushRef(*i),
+                Op::LoadLocal(i) => *op = Op::PushRefLocal(*i),   
+                Op::LoadGlobal(i) => *op = Op::PushRefGlobal(*i), 
                 _ => {},
             } 
         }

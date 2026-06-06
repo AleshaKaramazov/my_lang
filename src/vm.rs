@@ -29,7 +29,8 @@ impl<'a> VM {
             Op::PushChar(c) => self.stack.push(Value::Char(c)),
             Op::PushNumber(n) => self.stack.push(Value::Number(n)),
             Op::PushBool(b) => self.stack.push(Value::Bool(b)),
-            Op::PushRef(r) => self.stack.push(Value::Ref(r)),
+            Op::PushRefLocal(idx) => self.stack.push(Value::Ref(self.now_frame + idx)),
+            Op::PushRefGlobal(idx) => self.stack.push(Value::Ref(idx)),
             Op::PushFn(id) => self.stack.push(Value::Fn(id)),
             Op::PushVoid => self.stack.push(Value::Void),
             Op::Pop => {
@@ -63,6 +64,54 @@ impl<'a> VM {
                     _ => unreachable!(),
                 };
                 self.stack.push(Value::Bool(result));
+            }
+            Op::MakeOk => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                self.stack.push(Value::Result(Box::new(Ok(val))));
+            }
+            Op::MakeErr => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                self.stack.push(Value::Result(Box::new(Err(val))));
+            }
+            Op::MakeSome => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                self.stack.push(Value::Cat(Some(Box::new(val))));
+            }
+            Op::None => {
+                self.stack.push(Value::Cat(None));
+            }
+            Op::SafeUnwR(target) => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                match val {
+                    Value::Result(inner) => if let Ok(inner) = *inner {
+                        self.stack.push(inner);
+                    } else {
+                        *ip = target;
+                        return Ok(());
+                    }
+                    Value::Cat(Some(inner)) => {
+                        self.stack.push(*inner);
+                    }
+                    _ => {
+                        *ip = target;
+                        return Ok(());
+                    }
+                }
+            }
+            Op::SafeUnwL(target) => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                match val {
+                    Value::Result(inner) => if let Err(inner) = *inner {
+                        self.stack.push(inner);
+                    } else {
+                        *ip = target;
+                        return Ok(());
+                    }
+                    _ => {
+                        *ip = target;
+                        return Ok(());
+                    }
+                }
             }
             Op::MakeRange(incl) => {
                 let end = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
@@ -205,9 +254,11 @@ impl<'a> VM {
                             "len" => {
                                 let res = match &args[0] {
                                     Value::Str(s) => Value::Number(s.chars().count() as i64),
+                                    Value::Set(s) => Value::Number(s.len() as i64),
                                     Value::Ref(idx) => match &self.frame[*idx] {
                                         Value::Str(s) => Value::Number(s.chars().count() as i64),
-                                        _ => return Err("can't get len".to_string()),
+                                        Value::Set(s) => Value::Number(s.len() as i64),
+                                        unk => return Err(format!("can't get len: {}", unk)),
                                     }
                                     _ => return Err("can't get len".to_string()),
                                 };
