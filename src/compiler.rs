@@ -103,7 +103,19 @@ impl<'a> Compiler<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<(), String> {
-        self.parse_logical_or()
+        self.parse_range()
+    }
+
+    fn parse_range(&mut self) -> Result<(), String> {
+        self.parse_logical_or()?;
+        
+        if self.current_token == Token::DotDot {
+            self.advance_token();
+            let incl = self.next_if(Token::Assign);
+            self.parse_logical_or()?;
+            self.code.push(Op::MakeRange(incl));
+        }
+        Ok(())
     }
 
     fn parse_logical_or(&mut self) -> Result<(), String> {
@@ -166,7 +178,6 @@ impl<'a> Compiler<'a> {
 
     fn parse_relational(&mut self) -> Result<(), String> {
         self.parse_arifm_or()?;
-
         loop {
             match self.current_token {
                 Token::Greater => { 

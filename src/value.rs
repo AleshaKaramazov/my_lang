@@ -10,18 +10,38 @@ pub enum Value {
     Char(char),
     Bool(bool),
     Ref(usize),
+    Range(Range),
     Iter(Iterator),
+}
+
+#[derive(Debug, Clone)]
+pub struct Range {
+    pub start: i64,
+    pub end: i64,
+    pub step: i64,
 }
 
 #[derive(Debug, Clone)]
 pub enum Iterator {
     String(IntoIter<char>),
+    Range(Range)
 }
 
 impl Iterator {
     fn next(&mut self) -> Option<Value> {
         match self {
             Self::String(s) => s.next().map(|x| Value::Char(x)),
+            Iterator::Range(range) => {
+                let current = range.start;
+                
+                if (range.step > 0 && current >= range.end) || 
+                   (range.step < 0 && current <= range.end) {
+                    return None;
+                }
+                range.start += range.step;
+                
+                Some(Value::Number(current))
+            }
         } 
     }
 }
@@ -45,12 +65,33 @@ impl<'a> Value {
         }
     }
 
+    pub fn expect_number(&self) -> Result<i64, String> {
+        match self {
+            Self::Number(i) => Ok(*i),
+            _ => Err(format!("Can't eval number from: {}", self))
+        }
+    }
+
+    pub fn make_range(start: Value, end: Value, incl: bool) -> Result<Value, String> {
+        let start = start.expect_number()?;
+        let mut end = end.expect_number()?;
+        if incl {
+            if start > end {
+                end -= 1;
+            } else {
+                end += 1; 
+            }
+        }
+        Ok(Value::Range(Range { start, end, step: if start > end {-1} else {1} }))
+    }
+
     pub fn make_iter(self) -> Result<Value, String> {
         let val = match self {
             Self::Str(s) => {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
                 Value::Iter(Iterator::String(iter))
             }
+            Self::Range(range) => Value::Iter(Iterator::Range(range)),
             _ => return Err(format!("Can't eval Iterator from: {}", self)),
         };
 
@@ -93,6 +134,7 @@ impl std::fmt::Display for Value {
             Self::Bool(b) => write!(f, "{}", b),
             Self::Char(c) => write!(f, "{}", c),
             Self::Str(s) => write!(f, "{}", s),
+            Self::Range(s) => write!(f, "{}..{}", s.start, s.end),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i)
         } 

@@ -11,6 +11,7 @@ pub enum Op<'a> {
     Pop,
     Dup,
     Swap,
+    MakeRange(bool),
     StoreLocal(usize),
     LoadLocal(usize),
     CallFunc(usize),

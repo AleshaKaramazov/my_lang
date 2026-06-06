@@ -54,6 +54,11 @@ impl<'a> VM {
                 };
                 self.stack.push(Value::Bool(result));
             }
+            Op::MakeRange(incl) => {
+                let end = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
+                let start = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
+                self.stack.push(Value::make_range(start, end, incl)?);
+            }
             Op::Swap => {
                 let len = self.stack.len();
                 if len < 2 {
@@ -146,6 +151,15 @@ impl<'a> VM {
                     _ => return Err("can't get len".to_string()),
                 };
                 self.stack.push(res);
+            }
+            "step" => {
+                let mut arg = if let Value::Range(i) = &args[0] {
+                    i.clone()
+                } else {
+                    return Err("Step only for ranges".to_string());
+                };
+                arg.step = args[1].expect_number()?;
+                self.stack.push(Value::Range(arg));
             }
             "writeln" => {
                 print!("WRITEFUNC: ");
