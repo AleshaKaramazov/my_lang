@@ -12,6 +12,7 @@ pub enum Value {
     Ref(usize),
     Range(Range),
     Iter(Iterator),
+    Fn(usize),
     Set(Vec<Value>),
 }
 
@@ -197,6 +198,7 @@ impl std::fmt::Display for Value {
             Self::Str(s) => write!(f, "{}", s),
             Self::Range(s) => write!(f, "{}..{}", s.start, s.end),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
+            Self::Fn(i) => write!(f, "FN<ID: {}>", i),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),
             Self::Set(s) => {
                 write!(f, "[ ")?;

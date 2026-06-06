@@ -5,9 +5,10 @@ pub struct Compiler<'a> {
     code: Vec<Op<'a>>,
     current_token: Token<'a>,
     lexer: Lexer<'a>,
-    variables: FxHashMap<&'a str, usize>,
+    variables: FxHashMap<&'a str, (usize, usize)>,
     next_slot: usize,
-    scope_changes: Vec<(&'a str, Option<usize>)>,
+    scope_depth: usize,
+    scope_changes: Vec<(&'a str, Option<(usize, usize)>)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -19,6 +20,7 @@ impl<'a> Compiler<'a> {
             lexer, 
             variables: FxHashMap::default(),
             next_slot: 0,
+            scope_depth: 0,
             scope_changes: Vec::new(),
         }
     }
@@ -72,9 +74,13 @@ impl<'a> Compiler<'a> {
         
         let var_id = self.next_slot;
         self.next_slot += 1;
-        let old_val = self.variables.insert(loop_var, var_id);
+        let old_val = self.variables.insert(loop_var, (var_id, self.scope_depth));
         
-        self.code.push(Op::StoreLocal(var_id));
+        if self.scope_depth == 0 {
+            self.code.push(Op::StoreGlobal(var_id));
+        } else {
+            self.code.push(Op::StoreLocal(var_id));
+        }
         
         self.parse_block()?;
         
@@ -287,11 +293,16 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 
-                let var_id = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+                let (var_id, var_depth) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+                let is_global = var_depth == 0;
                 
                 let store_var = if self.current_token == Token::LBracket {
                     let mut deep: usize = 0;
-                    self.code.push(Op::LoadLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::LoadGlobal(var_id));
+                    } else {
+                        self.code.push(Op::LoadLocal(var_id));
+                    }
                     while self.next_if(Token::LBracket) {
                         deep += 1;
                         self.parse_expression()?;
@@ -312,18 +323,38 @@ impl<'a> Compiler<'a> {
                     self.next_slot += 1;
                     
                     self.code.push(Op::Dup);                  
-                    self.code.push(Op::StoreLocal(temp_slot));
+                    if self.scope_depth == 0 {
+                        self.code.push(Op::StoreGlobal(temp_slot));
+                    } else {
+                        self.code.push(Op::StoreLocal(temp_slot));
+                    }
                     
                     self.code.push(Op::StoreIndex(store_var));
-                    self.code.push(Op::StoreLocal(var_id));  
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }  
                     
-                    self.code.push(Op::LoadLocal(temp_slot)); 
+                    if self.scope_depth == 0 {
+                        self.code.push(Op::LoadGlobal(temp_slot));
+                    } else {
+                        self.code.push(Op::LoadLocal(temp_slot));
+                    }
                 } else {
-                    self.code.push(Op::LoadLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::LoadGlobal(var_id));
+                    } else {
+                        self.code.push(Op::LoadLocal(var_id));
+                    }
                     self.code.push(Op::PushNumber(1));
                     self.code.push(op);
                     self.code.push(Op::Dup);
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 }
             }
             _ => {
@@ -413,13 +444,99 @@ impl<'a> Compiler<'a> {
         let var_id = self.next_slot;
         self.next_slot += 1;
 
-        let old_value = self.variables.insert(name, var_id);
+        let old_value = self.variables.insert(name, (var_id, self.scope_depth));
         self.scope_changes.push((name, old_value));
 
-        self.code.push(Op::StoreLocal(var_id));
+        if self.scope_depth == 0 {
+            self.code.push(Op::StoreGlobal(var_id));
+        } else {
+            self.code.push(Op::StoreLocal(var_id));
+        }
 
         Ok(())
     }
+
+    pub fn parse_fn(&mut self) -> Result<(), String> {
+        self.advance_token(); 
+        
+        let func_name = if let Token::Ident(name) = self.current_token {
+            self.advance_token();
+            name
+        } else {
+            return Err("Need name after 'fn'".to_string());
+        };
+
+        let func_id = self.next_slot;
+        self.next_slot += 1;
+        
+        let old_next_slot = self.next_slot;
+
+        let old_func_val = self.variables.insert(func_name, (func_id, self.scope_depth));
+        self.scope_changes.push((func_name, old_func_val));
+
+        let start_change_idx = self.scope_changes.len();
+
+        let jump = self.add_plug(Op::Jump(0));
+        let func_entry = self.code.len(); 
+
+        self.next_slot = 0;
+        self.scope_depth += 1;
+        
+        let mut old_vals = vec![];
+        let mut old_names = vec![];
+        
+        self.expect(Token::LParen)?;
+        while !self.next_if(Token::RParen) {
+            let arg_name = if let Token::Ident(name) = self.current_token {
+                self.advance_token();
+                name
+            } else {
+                return Err("Need name after '(..'".to_string());
+            }; 
+            
+            let arg_slot = self.next_slot;
+            self.next_slot += 1;
+            
+            old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
+            old_names.push(arg_name);
+            self.next_if(Token::Comma);
+        }
+        
+        self.parse_block()?;
+
+        self.code.push(Op::Return);
+
+        for (pos, old_val) in old_vals.iter().enumerate() {
+            if let Some(prev) = old_val {
+                self.variables.insert(old_names[pos], *prev);
+            } else {
+                self.variables.remove(old_names[pos]);
+            }
+        }
+
+        while self.scope_changes.len() > start_change_idx {
+            if let Some((name, old_val)) = self.scope_changes.pop() {
+                if let Some(prev_slot) = old_val {
+                    self.variables.insert(name, prev_slot); 
+                } else {
+                    self.variables.remove(name); 
+                }
+            }
+        }
+
+        self.scope_depth -= 1;
+        self.next_slot = old_next_slot;
+        self.patch_plug(jump);
+
+        self.code.push(Op::PushFn(func_entry));
+        if self.scope_depth == 0 {
+            self.code.push(Op::StoreGlobal(func_id));
+        } else {
+            self.code.push(Op::StoreLocal(func_id));
+        }
+        
+        Ok(())
+    }  
 
     pub fn parse_block(&mut self) -> Result<(), String> {
         self.expect(Token::Begin)?; 
@@ -443,6 +560,10 @@ impl<'a> Compiler<'a> {
                     self.parse_for()?;
                     has_expression_value = false;
                 }
+                Token::Func => {
+                    self.parse_fn()?;
+                    has_expression_value = false;
+                }
                 Token::While => {
                     self.parse_while()?;
                     has_expression_value = false;
@@ -450,11 +571,6 @@ impl<'a> Compiler<'a> {
                 Token::Begin => {
                     self.parse_block()?;
                     self.code.push(Op::Pop);
-                    has_expression_value = true;
-                }
-                Token::Ident(name) => {
-                    self.parse_ident(name)?; 
-                    self.next_if(Token::Semicolon);
                     has_expression_value = true;
                 }
                 _ => {
@@ -502,6 +618,7 @@ impl<'a> Compiler<'a> {
             let op = self.code.last_mut().unwrap();
             match op {
                 Op::LoadLocal(i) => *op = Op::PushRef(*i),
+                Op::LoadGlobal(i) => *op = Op::PushRef(*i),
                 _ => {},
             } 
         }
@@ -515,7 +632,17 @@ impl<'a> Compiler<'a> {
             }
         }
         self.expect(Token::RParen)?;
-        self.code.push(Op::PushStr(name));
+
+        if let Some(&(id, depth)) = self.variables.get(name) {
+            if depth == 0 {
+                self.code.push(Op::LoadGlobal(id));
+            } else {
+                self.code.push(Op::LoadLocal(id));
+            }
+        } else {
+            self.code.push(Op::PushStr(name));
+        }
+        
         self.code.push(Op::CallFunc(arg_count));
         Ok(())
     }
@@ -528,11 +655,16 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
-        let var_id = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+        let (var_id, var_depth) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+        let is_global = var_depth == 0;
 
         let store_var = if self.current_token == Token::LBracket {
             let mut deep: usize = 0;
-            self.code.push(Op::LoadLocal(var_id));
+            if is_global {
+                self.code.push(Op::LoadGlobal(var_id));
+            } else {
+                self.code.push(Op::LoadLocal(var_id));
+            }
             while self.next_if(Token::LBracket) {
                 deep += 1;
                 self.parse_expression()?;
@@ -549,9 +681,17 @@ impl<'a> Compiler<'a> {
                 self.parse_expression()?;
                 if store_var != 0 {
                     self.code.push(Op::StoreIndex(store_var));
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 } else {
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 }
                 self.code.push(Op::PushVoid);
             }
@@ -572,12 +712,24 @@ impl<'a> Compiler<'a> {
                     self.parse_expression()?;              
                     self.code.push(op);                    
                     self.code.push(Op::StoreIndex(store_var));
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 } else {
-                    self.code.push(Op::LoadLocal(var_id)); 
+                    if is_global {
+                        self.code.push(Op::LoadGlobal(var_id));
+                    } else {
+                        self.code.push(Op::LoadLocal(var_id));
+                    }
                     self.parse_expression()?;              
                     self.code.push(op);                    
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 }
                 self.code.push(Op::PushVoid);
             }
@@ -596,22 +748,38 @@ impl<'a> Compiler<'a> {
                     self.code.push(op);
                     
                     self.code.push(Op::StoreIndex(store_var));
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                     
                     self.code.push(Op::LoadIndex(store_var));
                 } else {
-                    self.code.push(Op::LoadLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::LoadGlobal(var_id));
+                    } else {
+                        self.code.push(Op::LoadLocal(var_id));
+                    }
                     self.code.push(Op::Dup); 
                     self.code.push(Op::PushNumber(1));
                     self.code.push(op);
-                    self.code.push(Op::StoreLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
                 }
             }
             _ => {
                 if store_var != 0 {
                     self.code.push(Op::LoadIndex(store_var));
                 } else {
-                    self.code.push(Op::LoadLocal(var_id));
+                    if is_global {
+                        self.code.push(Op::LoadGlobal(var_id));
+                    } else {
+                        self.code.push(Op::LoadLocal(var_id));
+                    }
                 }
             }
         }

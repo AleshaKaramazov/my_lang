@@ -12,9 +12,12 @@ pub enum Op<'a> {
     Dup,
     DupTarget(usize),
     Swap,
+    PushFn(usize),
     MakeRange(bool),
     StoreLocal(usize),
     LoadLocal(usize),
+    LoadGlobal(usize),
+    StoreGlobal(usize),
     CallFunc(usize),
     JumpIfFalse(usize),
     Jump(usize),
@@ -37,4 +40,5 @@ pub enum Op<'a> {
     Less,
     GreaterEq,
     LessEq,
+    Return,
 }

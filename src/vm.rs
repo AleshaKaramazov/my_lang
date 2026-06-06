@@ -3,6 +3,13 @@ use crate::{op::Op, value::Value};
 pub struct VM {
     stack: Vec<Value>,
     frame: Vec<Value>,
+    call_stack: Vec<CallFrame>,
+    now_frame: usize,
+}
+
+struct CallFrame {
+    return_ip: usize, 
+    old_frame: usize, 
 }
 
 impl<'a> VM {
@@ -10,6 +17,8 @@ impl<'a> VM {
         Self {
             stack: Vec::with_capacity(32),
             frame: Vec::with_capacity(32),
+            call_stack: Vec::with_capacity(32),
+            now_frame: 0,
         }
     }
 
@@ -21,6 +30,7 @@ impl<'a> VM {
             Op::PushNumber(n) => self.stack.push(Value::Number(n)),
             Op::PushBool(b) => self.stack.push(Value::Bool(b)),
             Op::PushRef(r) => self.stack.push(Value::Ref(r)),
+            Op::PushFn(id) => self.stack.push(Value::Fn(id)),
             Op::PushVoid => self.stack.push(Value::Void),
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
@@ -153,72 +163,116 @@ impl<'a> VM {
             }
             Op::StoreLocal(idx) => {
                 let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
+                let index = self.now_frame + idx;
+
+                if index >= self.frame.len() {
+                    self.frame.resize(index + 1, Value::Void);
+                }
+                self.frame[index] = value;
+            }
+            Op::StoreGlobal(idx) => {
+                let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
                 if idx >= self.frame.len() {
                     self.frame.resize(idx + 1, Value::Void);
                 }
                 self.frame[idx] = value;
             }
             Op::LoadLocal(idx) => {
-                if idx >= self.frame.len() {
+                let index = self.now_frame + idx;
+                if index >= self.frame.len() {
                     return Err(format!("VM Error: Uninitialized frame slot {}", idx));
+                }
+                self.stack.push(self.frame[index].clone());
+            }
+            Op::LoadGlobal(idx) => {
+                if idx >= self.frame.len() {
+                    return Err(format!("VM Error: Uninitialized global slot {}", idx));
                 }
                 self.stack.push(self.frame[idx].clone());
             }
             Op::CallFunc(n) => {
-                self.call_function(n)?;
+                let func_val = self.stack.pop().ok_or_else(|| "VM Error: Missing function identifier".to_string())?;
+                
+                match func_val {
+                    Value::Str(func_name) => {
+                        let mut args = Vec::with_capacity(n);
+                        for _ in 0..n {
+                            args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for CallFunc".to_string())?);
+                        }
+                        args.reverse();
+
+                        match func_name.as_str() {
+                            "len" => {
+                                let res = match &args[0] {
+                                    Value::Str(s) => Value::Number(s.chars().count() as i64),
+                                    Value::Ref(idx) => match &self.frame[*idx] {
+                                        Value::Str(s) => Value::Number(s.chars().count() as i64),
+                                        _ => return Err("can't get len".to_string()),
+                                    }
+                                    _ => return Err("can't get len".to_string()),
+                                };
+                                self.stack.push(res);
+                            }
+                            "step" => {
+                                let mut arg = if let Value::Range(i) = &args[0] {
+                                    i.clone()
+                                } else {
+                                    return Err("Step only for ranges".to_string());
+                                };
+                                arg.step = args[1].expect_number()?;
+                                self.stack.push(Value::Range(arg));
+                            }
+                            "writeln" => {
+                                print!("WRITEFUNC: ");
+                                for (i, arg) in args.iter().enumerate() {
+                                    print!("{}", arg);
+                                    if i < args.len() - 1 {
+                                        print!(" ");
+                                    }
+                                }
+                                println!();
+                                self.stack.push(Value::Void);
+                            }
+                            _ => return Err(format!("VM Error: Unknown function '{}'", func_name)),
+                        }
+                    }
+                    Value::Fn(target_ip) => {
+                        let mut args = Vec::with_capacity(n);
+                        for _ in 0..n {
+                            args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for user function".to_string())?);
+                        }
+                        args.reverse();
+
+                        self.call_stack.push(CallFrame {
+                            return_ip: *ip + 1, 
+                            old_frame: self.now_frame,
+                        });
+
+                        self.now_frame = self.frame.len();
+
+                        self.frame.extend(args);
+
+                        *ip = target_ip;
+                        return Ok(()); 
+                    }
+                    _ => return Err("VM Error: Attempted to call a non-callable value".to_string()),
+                }
+            }
+            Op::Return => {
+                let return_val = self.stack.pop().ok_or_else(|| "VM Error: No return value on stack".to_string())?;
+                
+                let frame = self.call_stack.pop().ok_or_else(|| "VM Error: Call stack underflow on Return".to_string())?;
+                
+                self.frame.truncate(self.now_frame);
+                
+                self.now_frame = frame.old_frame;
+                *ip = frame.return_ip;
+                
+                self.stack.push(return_val);
+                return Ok(()); 
             }
         }
         *ip += 1;
-        Ok(())
-    }
-
-    fn call_function(&mut self, n: usize) -> Result<(), String> {
-        let func_val = self.stack.pop().ok_or_else(|| "VM Error: Missing function name".to_string())?;
-        let func_name = match func_val {
-            Value::Str(s) => s,
-            _ => return Err("VM Error: Function name must be a string".to_string()),
-        };
-
-        let mut args = Vec::with_capacity(n);
-        for _ in 0..n {
-            args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for CallFunc".to_string())?);
-        }
-        args.reverse();
-
-        match func_name.as_str() {
-            "len" => {
-                let res = match &args[0] {
-                    Value::Str(s) => Value::Number(s.chars().count() as i64),
-                    Value::Ref(idx) => match &self.frame[*idx] {
-                        Value::Str(s) => Value::Number(s.chars().count() as i64),
-                        _ => return Err("can't get len".to_string()),
-                    }
-                    _ => return Err("can't get len".to_string()),
-                };
-                self.stack.push(res);
-            }
-            "step" => {
-                let mut arg = if let Value::Range(i) = &args[0] {
-                    i.clone()
-                } else {
-                    return Err("Step only for ranges".to_string());
-                };
-                arg.step = args[1].expect_number()?;
-                self.stack.push(Value::Range(arg));
-            }
-            "writeln" => {
-                print!("WRITEFUNC: ");
-                for (i, arg) in args.iter().enumerate() {
-                    print!("{}", arg);
-                    if i < args.len() - 1 {
-                        print!(" ");
-                    }
-                }
-                println!();
-                self.stack.push(Value::Void);
-            }
-            _ => return Err(format!("VM Error: Unknown function '{}'", func_name)),
-        }
         Ok(())
     }
 
