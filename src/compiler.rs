@@ -371,6 +371,9 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.code.push(Op::PushStr(s));
             }
+            Token::ArifmOr | Token::Or => {
+                self.parse_fn(None, true)?;
+            }
             Token::Ok | Token::Some | Token::Err => {
                 let oper = match self.current_token {
                     Token::Ok => Op::MakeOk,
@@ -523,24 +526,18 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_fn(&mut self) -> Result<(), String> {
-        self.advance_token(); 
-        
-        let func_name = if let Token::Ident(name) = self.current_token {
-            self.advance_token();
-            name
+    pub fn parse_fn(&mut self, func_name: Option<&'a str>, is_anonymous: bool) -> Result<(), String> {
+        let func_id = if let Some(name) = func_name {
+            let id = self.next_slot;
+            self.next_slot += 1;
+            let old_func_val = self.variables.insert(name, (id, self.scope_depth));
+            self.scope_changes.push((name, old_func_val));
+            Some(id)
         } else {
-            return Err("Need name after 'fn'".to_string());
+            None
         };
 
-        let func_id = self.next_slot;
-        self.next_slot += 1;
-        
         let old_next_slot = self.next_slot;
-
-        let old_func_val = self.variables.insert(func_name, (func_id, self.scope_depth));
-        self.scope_changes.push((func_name, old_func_val));
-
         let start_change_idx = self.scope_changes.len();
 
         let jump = self.add_plug(Op::Jump(0));
@@ -552,21 +549,45 @@ impl<'a> Compiler<'a> {
         let mut old_vals = vec![];
         let mut old_names = vec![];
         
-        self.expect(Token::LParen)?;
-        while !self.next_if(Token::RParen) {
-            let arg_name = if let Token::Ident(name) = self.current_token {
+        if is_anonymous {
+            if self.current_token == Token::ArifmOr {
                 self.advance_token();
-                name
-            } else {
-                return Err("Need name after '(..'".to_string());
-            }; 
-            
-            let arg_slot = self.next_slot;
-            self.next_slot += 1;
-            
-            old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
-            old_names.push(arg_name);
-            self.next_if(Token::Comma);
+                while self.current_token != Token::ArifmOr {
+                    let arg_name = if let Token::Ident(name) = self.current_token {
+                        self.advance_token();
+                        name
+                    } else {
+                        return Err("Need name after '|'".to_string());
+                    }; 
+                    
+                    let arg_slot = self.next_slot;
+                    self.next_slot += 1;
+                    
+                    old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
+                    old_names.push(arg_name);
+                    self.next_if(Token::Comma);
+                }
+                self.expect(Token::ArifmOr)?;
+            } else if self.current_token == Token::Or {
+                self.advance_token();
+            }
+        } else {
+            self.expect(Token::LParen)?;
+            while !self.next_if(Token::RParen) {
+                let arg_name = if let Token::Ident(name) = self.current_token {
+                    self.advance_token();
+                    name
+                } else {
+                    return Err("Need name after '(..'".to_string());
+                }; 
+                
+                let arg_slot = self.next_slot;
+                self.next_slot += 1;
+                
+                old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
+                old_names.push(arg_name);
+                self.next_if(Token::Comma);
+            }
         }
         
         self.parse_block()?;
@@ -596,14 +617,17 @@ impl<'a> Compiler<'a> {
         self.patch_plug(jump);
 
         self.code.push(Op::PushFn(func_entry));
-        if self.scope_depth == 0 {
-            self.code.push(Op::StoreGlobal(func_id));
-        } else {
-            self.code.push(Op::StoreLocal(func_id));
+        
+        if let Some(id) = func_id {
+            if self.scope_depth == 0 {
+                self.code.push(Op::StoreGlobal(id));
+            } else {
+                self.code.push(Op::StoreLocal(id));
+            }
         }
         
         Ok(())
-    }  
+    }
 
     pub fn parse_block(&mut self) -> Result<(), String> {
         self.expect(Token::Begin)?; 
@@ -628,7 +652,14 @@ impl<'a> Compiler<'a> {
                     has_expression_value = false;
                 }
                 Token::Func => {
-                    self.parse_fn()?;
+                    self.advance_token();
+                    let func_name = if let Token::Ident(name) = self.current_token {
+                        self.advance_token();
+                        Some(name)
+                    } else {
+                        return Err("Need name after 'fn'".to_string());
+                    };
+                    self.parse_fn(func_name, false)?;
                     has_expression_value = false;
                 }
                 Token::While => {
