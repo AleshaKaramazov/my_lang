@@ -338,7 +338,7 @@ impl<'a> Lexer<'a> {
 
 #[inline(always)]
 fn is_ident_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_'
+    c.is_alphabetic()
 }
 
 #[inline(always)]

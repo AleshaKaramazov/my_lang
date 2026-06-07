@@ -266,7 +266,7 @@ impl<'a> Compiler<'a> {
         self.parse_unary()?;
 
         if self.current_token == Token::Pow || self.current_token == Token::Mod {
-            let oper = if self.next_if(Token::Pow) {Op::Pow} else {Op::Mod};
+            let oper = if self.current_token == Token::Pow {Op::Pow} else {Op::Mod};
             self.advance_token();
             self.parse_power()?;
             self.code.push(oper);
@@ -465,6 +465,9 @@ impl<'a> Compiler<'a> {
             Token::If => {
                 self.parse_if(true)?;
             }
+            Token::Match => {
+                self.parse_match()?;
+            }
             Token::Ident(name) => self.parse_ident(name)?,
             Token::Begin => self.parse_block()?,
             Token::LParen => {
@@ -661,6 +664,10 @@ impl<'a> Compiler<'a> {
                     self.parse_fn(func_name, false)?;
                     has_expression_value = false;
                 }
+                Token::Match => {
+                    self.parse_match()?;
+                    has_expression_value = true;
+                }
                 Token::While => {
                     self.parse_while()?;
                     has_expression_value = false;
@@ -710,6 +717,152 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    pub fn parse_match(&mut self) -> Result<(), String> {
+        self.advance_token();
+        self.parse_expression()?;
+        self.expect(Token::Begin)?;
+
+        let mut end_jumps = Vec::new();
+
+        while self.current_token != Token::End && self.current_token != Token::Eof {
+            let mut next_arm_jumps = Vec::new();
+            let start_change_idx = self.scope_changes.len();
+            let old_next_slot = self.next_slot;
+
+            match self.current_token {
+                Token::Ok | Token::Some | Token::Err => {
+                    let is_right = matches!(self.current_token, Token::Ok | Token::Some);
+                    self.advance_token();
+                    self.expect(Token::LParen)?;
+                    
+                    let name = match self.current_token {
+                        Token::Ident(n) => n,
+                        _ => return Err("Expected identifier".to_string()),
+                    };
+                    self.advance_token();
+                    self.expect(Token::RParen)?;
+
+                    self.code.push(Op::Dup);
+
+                    let fail_jump = self.code.len();
+                    if is_right {
+                        self.code.push(Op::SafeUnwR(0));
+                    } else {
+                        self.code.push(Op::SafeUnwL(0));
+                    }
+                    next_arm_jumps.push(fail_jump);
+
+                    let var_id = self.next_slot;
+                    self.next_slot += 1;
+
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth));
+                    self.scope_changes.push((name, old_val));
+
+                    if self.scope_depth == 0 {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
+                }
+                Token::UnderScope => {
+                    self.advance_token();
+                }
+                Token::Number(_) | Token::String(_) | Token::Char(_) | Token::Bool(_) | Token::Minus => {
+                    let mut or_match_jumps = Vec::new();
+                    loop {
+                        self.code.push(Op::Dup);
+                        
+                        let is_neg = self.next_if(Token::Minus);
+                        
+                        match self.current_token {
+                            Token::Number(n) => {
+                                self.code.push(Op::PushNumber(if is_neg { -n } else { n }));
+                                self.advance_token();
+                            }
+                            Token::String(s) if !is_neg => {
+                                self.code.push(Op::PushStr(s));
+                                self.advance_token();
+                            }
+                            Token::Char(c) if !is_neg => {
+                                self.code.push(Op::PushChar(c));
+                                self.advance_token();
+                            }
+                            Token::Bool(b) if !is_neg => {
+                                self.code.push(Op::PushBool(b));
+                                self.advance_token();
+                            }
+                            _ => return Err(format!("Expected literal pattern, got {:?}", self.current_token)),
+                        }
+                        
+                        self.code.push(Op::Equal);
+                        or_match_jumps.push(self.add_plug(Op::JumpIfTrue(0)));
+
+                        if self.next_if(Token::ArifmOr) {
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    next_arm_jumps.push(self.code.len());
+                    self.code.push(Op::Jump(0));
+
+                    for jump in or_match_jumps {
+                        self.patch_plug(jump);
+                    }
+                }
+                _ => return Err(format!("Expected pattern, got {:?}", self.current_token)),
+            }
+
+            if self.next_if(Token::If) {
+                self.parse_expression()?;
+                next_arm_jumps.push(self.code.len());
+                self.code.push(Op::JumpIfFalse(0));
+            }
+
+            self.expect(Token::FatArrow)?;
+
+            self.code.push(Op::Pop);
+            self.parse_expression()?;
+            self.next_if(Token::Comma);
+
+            end_jumps.push(self.add_plug(Op::Jump(0)));
+
+            while self.scope_changes.len() > start_change_idx {
+                if let Some((name, old_val)) = self.scope_changes.pop() {
+                    if let Some(prev_slot) = old_val {
+                        self.variables.insert(name, prev_slot);
+                    } else {
+                        self.variables.remove(name);
+                    }
+                }
+            }
+            self.next_slot = old_next_slot;
+
+            for jump in next_arm_jumps {
+                let target = self.code.len();
+                match self.code[jump] {
+                    Op::JumpIfFalse(_) => self.code[jump] = Op::JumpIfFalse(target),
+                    Op::Jump(_) => self.code[jump] = Op::Jump(target),
+                    Op::SafeUnwR(_) => self.code[jump] = Op::SafeUnwR(target),
+                    Op::SafeUnwL(_) => self.code[jump] = Op::SafeUnwL(target),
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        self.expect(Token::End)?;
+
+        self.code.push(Op::Pop);
+        self.code.push(Op::PushVoid);
+
+        for jump in end_jumps {
+            self.patch_plug(jump);
+        }
+
+        Ok(())
+    }
+
     pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), String> {
         let mut arg_count = 0;
         if first_arg {
@@ -721,16 +874,11 @@ impl<'a> Compiler<'a> {
                 _ => {},
             } 
         }
-        if self.current_token != Token::RParen {
-            loop {
-                self.parse_expression()?;
-                arg_count += 1;
-                if !self.next_if(Token::Comma) {
-                    break;
-                }
-            }
+        while !self.next_if(Token::RParen) {
+            self.parse_expression()?;
+            arg_count += 1;
+            self.next_if(Token::Comma);
         }
-        self.expect(Token::RParen)?;
 
         if let Some(&(id, depth)) = self.variables.get(name) {
             if depth == 0 {
@@ -919,7 +1067,7 @@ impl<'a> Compiler<'a> {
         }
 
         if !has_else {
-            if need_else || self.current_token == Token::End {
+            if need_else && self.current_token == Token::End {
                 return Err("need else branch".to_string())
             } else {
                 self.code.push(Op::PushVoid);

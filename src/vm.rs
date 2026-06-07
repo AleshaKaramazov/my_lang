@@ -1,4 +1,4 @@
-use crate::{op::Op, value::Value};
+use crate::{consts, op::Op, value::Value};
 
 pub struct VM {
     stack: Vec<Value>,
@@ -23,7 +23,8 @@ impl<'a> VM {
     }
 
     #[inline(always)]
-    pub fn step(&mut self, op: &Op<'a>, ip: &mut usize) -> Result<(), String> {
+    pub fn step(&mut self, code: &[Op<'a>], ip: &mut usize) -> Result<(), String> {
+        let op = &code[*ip];
         match *op {
             Op::PushStr(s) => self.stack.push(Value::Str(s.to_string())),
             Op::PushChar(c) => self.stack.push(Value::Char(c)),
@@ -250,55 +251,7 @@ impl<'a> VM {
                             args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for CallFunc".to_string())?);
                         }
                         args.reverse();
-
-                        match func_name.as_str() {
-                            "len" => {
-                                let res = match &args[0] {
-                                    Value::Str(s) => Value::Number(s.chars().count() as i64),
-                                    Value::Set(s) => Value::Number(s.len() as i64),
-                                    Value::Ref(idx) => match &self.frame[*idx] {
-                                        Value::Str(s) => Value::Number(s.chars().count() as i64),
-                                        Value::Set(s) => Value::Number(s.len() as i64),
-                                        unk => return Err(format!("can't get len: {}", unk)),
-                                    }
-                                    _ => return Err("can't get len".to_string()),
-                                };
-                                self.stack.push(res);
-                            }
-                            "push" => {
-                                let id = match &args[0] {
-                                    Value::Ref(idx) => *idx,
-                                    _ => return Ok(()),
-                                };
-
-                                match &mut self.frame[id] {
-                                    Value::Set(set) => set.push(args[1].clone()),
-                                    _ => return Err("can't push".to_string()),
-                                }
-                                self.stack.push(Value::Void);
-                            }
-                            "step" => {
-                                let mut arg = if let Value::Range(i) = &args[0] {
-                                    i.clone()
-                                } else {
-                                    return Err("Step only for ranges".to_string());
-                                };
-                                arg.step = args[1].expect_number()?;
-                                self.stack.push(Value::Range(arg));
-                            }
-                            "writeln" => {
-                                print!("WRITEFUNC: ");
-                                for (i, arg) in args.iter().enumerate() {
-                                    print!("{}", arg);
-                                    if i < args.len() - 1 {
-                                        print!(" ");
-                                    }
-                                }
-                                println!();
-                                self.stack.push(Value::Void);
-                            }
-                            _ => return Err(format!("VM Error: Unknown function '{}'", func_name)),
-                        }
+                        self.run_func(&func_name, args, code)?;
                     }
                     Value::Fn(target_ip) => {
                         let mut args = Vec::with_capacity(n);
@@ -340,10 +293,168 @@ impl<'a> VM {
         Ok(())
     }
 
+    pub fn run_func(&mut self, funcname: &str, args: Vec<Value>, code: &[Op<'a>]) -> Result<(), String> {
+         match funcname {
+            "len" => {
+                let res = match &args[0] {
+                    Value::Str(s) => Value::Number(s.chars().count() as i64),
+                    Value::Set(s) => Value::Number(s.len() as i64),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Str(s) => Value::Number(s.chars().count() as i64),
+                        Value::Set(s) => Value::Number(s.len() as i64),
+                        unk => return Err(format!("can't get len: {}", unk)),
+                    }
+                    _ => return Err("can't get len".to_string()),
+                };
+                self.stack.push(res);
+            }
+            "push" => {
+                let id = match &args[0] {
+                    Value::Ref(idx) => *idx,
+                    _ => return Ok(()),
+                };
+
+                match &mut self.frame[id] {
+                    Value::Set(set) => set.push(args[1].clone()),
+                    _ => return Err("can't push".to_string()),
+                }
+                self.stack.push(Value::Void);
+            }
+            "step" => {
+                let mut arg = if let Value::Range(i) = &args[0] {
+                    i.clone()
+                } else {
+                    return Err("Step only for ranges".to_string());
+                };
+                arg.step = args[1].expect_number()?;
+                self.stack.push(Value::Range(arg));
+            }
+            "writeln" => {
+                print!("WRITEFUNC: ");
+                for (i, arg) in args.iter().enumerate() {
+                    print!("{}", arg);
+                    if i < args.len() - 1 {
+                        print!(" ");
+                    }
+                }
+                println!();
+                self.stack.push(Value::Void);
+            }
+            "filter_map" => {
+                let set = match &args[0] {
+                    Value::Set(s) => s.clone(),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Set(s) => s.clone(),
+                        _ => return Err("map requires a set".to_string()),
+                    },
+                    _ => return Err("map requires a set".to_string()),
+                };
+                
+                let lambda_ip = match args[1] {
+                    Value::Fn(ip) => ip,
+                    _ => return Err("map requires a lambda".to_string()),
+                };
+
+                let mut result_set = Vec::new();
+                
+                for item in set {
+                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    
+                    let result = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
+                    match result {
+                        Value::Cat(res) => {
+                            if let Some(res) =  res {
+                                result_set.push(*res)
+                            }
+                        }
+                        _ => return Err("lambda in filter_map need to return Cat<Option<Value>>".to_string()), 
+                    }
+                }
+                
+                self.stack.push(Value::Set(result_set));
+
+            }
+            "map" => {
+                let set = match &args[0] {
+                    Value::Set(s) => s.clone(),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Set(s) => s.clone(),
+                        _ => return Err("map requires a set".to_string()),
+                    },
+                    _ => return Err("map requires a set".to_string()),
+                };
+                
+                let lambda_ip = match args[1] {
+                    Value::Fn(ip) => ip,
+                    _ => return Err("map requires a lambda".to_string()),
+                };
+
+                let mut result_set = Vec::new();
+                
+                for item in set {
+                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    
+                    let result = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
+                    result_set.push(result);
+                }
+                
+                self.stack.push(Value::Set(result_set));
+
+            }
+            "filter" => {
+                let set = match &args[0] {
+                    Value::Set(s) => s.clone(),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Set(s) => s.clone(),
+                        _ => return Err("filter requires a set".to_string()),
+                    },
+                    _ => return Err("filter requires a set".to_string()),
+                };
+                
+                let lambda_ip = match args[1] {
+                    Value::Fn(ip) => ip,
+                    _ => return Err("filter requires a lambda".to_string()),
+                };
+
+                let mut result_set = Vec::new();
+                
+                for item in set {
+                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    
+                    let cond = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
+                    if cond.is_truthy() {
+                        result_set.push(item);
+                    }
+                }
+                
+                self.stack.push(Value::Set(result_set));
+            }
+            _ => return Err(format!("VM Error: Unknown function '{}'", funcname)),
+        }
+        Ok(())
+    } 
+
+    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>) -> Result<(), String> {
+        self.call_stack.push(CallFrame {
+            return_ip: consts::STOP_FLAG, 
+            old_frame: self.now_frame,
+        });
+
+        self.now_frame = self.frame.len();
+        self.frame.extend(args);
+
+        let mut ip = target_ip;
+        while ip != consts::STOP_FLAG && ip < code.len() {
+            self.step(&code, &mut ip)?;
+        }
+
+        Ok(())
+    }
+
     pub fn run(&mut self, code: &[Op<'a>]) -> Result<(), String> {
         let mut ip = 0;
         while ip < code.len() {
-            self.step(&code[ip], &mut ip)?;
+            self.step(&code, &mut ip)?;
         }
         Ok(())
     }
