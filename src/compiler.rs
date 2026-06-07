@@ -504,6 +504,32 @@ impl<'a> Compiler<'a> {
     fn parse_type(&mut self) -> Result<Type, String> {
         let res = match self.current_token {
             Token::TypeNumber => Type::Number,
+            Token::TypeStr => Type::Str,
+            Token::TypeBool => Type::Str,
+            Token::TypeChar => Type::Char,
+            Token::TypeSet => {
+                self.advance_token();
+                self.expect(Token::Less)?;
+                let tp = self.parse_type()?;
+                self.expect(Token::Greater)?;
+                return Ok(Type::Set(Box::new(tp)))
+            }
+            Token::TypeCat => {
+                self.advance_token();
+                self.expect(Token::Less)?;
+                let tp = self.parse_type()?;
+                self.expect(Token::Greater)?;
+                return Ok(Type::Cat(Box::new(tp)))
+            }
+            Token::TypeResult => {
+                self.advance_token();
+                self.expect(Token::Less)?;
+                let ok_tp = self.parse_type()?;
+                self.expect(Token::Comma)?;
+                let err_tp = self.parse_type()?;
+                self.expect(Token::Greater)?;
+                return Ok(Type::Result(Box::new((ok_tp, err_tp))))
+            }
             _ => return Err("Unknown type".to_string()),
         };
         self.advance_token();
@@ -567,6 +593,7 @@ impl<'a> Compiler<'a> {
         
         let mut old_vals = vec![];
         let mut old_names = vec![];
+        let mut arg_types = vec![]; 
         
         if self.current_token == Token::ArifmOr {
             self.advance_token();
@@ -578,11 +605,19 @@ impl<'a> Compiler<'a> {
                     return Err("Need name after '|'".to_string());
                 }; 
                 
+                let arg_type = if self.next_if(Token::Colon) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+
                 let arg_slot = self.next_slot;
                 self.next_slot += 1;
 
                 old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
                 old_names.push(arg_name);
+                arg_types.push((arg_slot, arg_type)); 
+                
                 self.next_if(Token::Comma);
             }
             self.expect(Token::ArifmOr)?;
@@ -596,9 +631,16 @@ impl<'a> Compiler<'a> {
             self.expect(Token::Arrow)?;
             self.parse_type()?
         };
-        self.parse_block()?;
 
-        self.code.push(Op::ExpectType(exp));
+        for (slot, ty) in arg_types {
+            if let Some(t) = ty {
+                self.code.push(Op::LoadLocal(slot));
+                self.code.push(Op::ExpectType(t));
+                self.code.push(Op::Pop);
+            }
+        }
+
+        self.parse_block()?;        self.code.push(Op::ExpectType(exp));
         self.code.push(Op::Return);
 
         for (pos, old_val) in old_vals.iter().enumerate() {
@@ -921,6 +963,7 @@ impl<'a> Compiler<'a> {
             Token::Assign => {
                 self.advance_token();
                 self.parse_expression()?;
+
                 if store_var != 0 {
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {

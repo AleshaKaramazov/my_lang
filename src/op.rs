@@ -2,7 +2,7 @@ use crate::types::Type;
 
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Op<'a> {
     PushStr(&'a str),
     PushChar(char),

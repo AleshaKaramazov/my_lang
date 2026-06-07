@@ -27,21 +27,21 @@ impl<'a> VM {
     #[inline(always)]
     pub fn step(&mut self, code: &[Op<'a>], ip: &mut usize) -> Result<(), String> {
         let op = &code[*ip];
-        match *op {
+        match op {
             Op::PushStr(s) => self.stack.push(Value::Str(s.to_string())),
-            Op::PushChar(c) => self.stack.push(Value::Char(c)),
-            Op::PushNumber(n) => self.stack.push(Value::Number(n)),
-            Op::PushBool(b) => self.stack.push(Value::Bool(b)),
+            Op::PushChar(c) => self.stack.push(Value::Char(*c)),
+            Op::PushNumber(n) => self.stack.push(Value::Number(*n)),
+            Op::PushBool(b) => self.stack.push(Value::Bool(*b)),
             Op::PushRefLocal(idx) => self.stack.push(Value::Ref(self.now_frame + idx)),
-            Op::PushRefGlobal(idx) => self.stack.push(Value::Ref(idx)),
-            Op::PushFn(id) => self.stack.push(Value::Fn(id)),
+            Op::PushRefGlobal(idx) => self.stack.push(Value::Ref(*idx)),
+            Op::PushFn(id) => self.stack.push(Value::Fn(*id)),
             Op::PushVoid => self.stack.push(Value::Void),
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
             }
             Op::ExpectType(tp) => {
                 let val = self.stack.last().unwrap();
-                if !val.this_type(tp) {
+                if !val.this_type(&tp) {
                     return Err(format!("Expected type: '{:?}', finded: '{:?}'", tp, val));
                 }
             }
@@ -96,14 +96,14 @@ impl<'a> VM {
                     Value::Result(inner) => if let Ok(inner) = *inner {
                         self.stack.push(inner);
                     } else {
-                        *ip = target;
+                        *ip = *target;
                         return Ok(());
                     }
                     Value::Cat(Some(inner)) => {
                         self.stack.push(*inner);
                     }
                     _ => {
-                        *ip = target;
+                        *ip = *target;
                         return Ok(());
                     }
                 }
@@ -114,11 +114,11 @@ impl<'a> VM {
                     Value::Result(inner) => if let Err(inner) = *inner {
                         self.stack.push(inner);
                     } else {
-                        *ip = target;
+                        *ip = *target;
                         return Ok(());
                     }
                     _ => {
-                        *ip = target;
+                        *ip = *target;
                         return Ok(());
                     }
                 }
@@ -126,7 +126,7 @@ impl<'a> VM {
             Op::MakeRange(incl) => {
                 let end = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
                 let start = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
-                self.stack.push(Value::make_range(start, end, incl)?);
+                self.stack.push(Value::make_range(start, end, *incl)?);
             }
             Op::Swap => {
                 let len = self.stack.len();
@@ -148,7 +148,7 @@ impl<'a> VM {
                 match val {
                     Some(val) => self.stack.push(val),
                     None => {
-                        *ip = i;
+                        *ip = *i;
                         return Ok(()); 
                     }
                 }
@@ -158,13 +158,13 @@ impl<'a> VM {
                 self.stack.push(Value::Bool(!val.is_truthy()));
             }
             Op::Jump(target) => {
-                *ip = target;
+                *ip = *target;
                 return Ok(()); 
             }
             Op::JumpIfFalse(target) => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 if !val.is_truthy() {
-                    *ip = target;
+                    *ip = *target;
                     return Ok(());
                 }
             }
@@ -176,7 +176,7 @@ impl<'a> VM {
             Op::JumpIfTrue(target) => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 if val.is_truthy() {
-                    *ip = target;
+                    *ip = *target;
                     return Ok(());
                 }
             }
@@ -192,7 +192,7 @@ impl<'a> VM {
             Op::StoreIndex(count) => {
                 let to_set = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreIndex".to_string())?;
                 
-                if count > 1 {
+                if *count > 1 {
                     let index_start = self.stack.len() - count;
                     let indexes: Vec<Value> = self.stack.drain(index_start..).collect();
                     let mut target = self.stack.pop().ok_or_else(|| "VM Error: No target for StoreIndex".to_string())?;
@@ -208,7 +208,7 @@ impl<'a> VM {
                 }
             }
             Op::LoadIndex(count) => {
-                let res = if count > 1 {
+                let res = if *count > 1 {
                     let index = self.stack.len() - count;
                     let indexes: Vec<Value> = self.stack.drain(index..).collect();
                     let value = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
@@ -231,10 +231,10 @@ impl<'a> VM {
             }
             Op::StoreGlobal(idx) => {
                 let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
-                if idx >= self.frame.len() {
+                if *idx >= self.frame.len() {
                     self.frame.resize(idx + 1, Value::Void);
                 }
-                self.frame[idx] = value;
+                self.frame[*idx] = value;
             }
             Op::LoadLocal(idx) => {
                 let index = self.now_frame + idx;
@@ -244,26 +244,26 @@ impl<'a> VM {
                 self.stack.push(self.frame[index].clone());
             }
             Op::LoadGlobal(idx) => {
-                if idx >= self.frame.len() {
+                if *idx >= self.frame.len() {
                     return Err(format!("VM Error: Uninitialized global slot {}", idx));
                 }
-                self.stack.push(self.frame[idx].clone());
+                self.stack.push(self.frame[*idx].clone());
             }
             Op::CallFunc(n) => {
                 let func_val = self.stack.pop().ok_or_else(|| "VM Error: Missing function identifier".to_string())?;
                 
                 match func_val {
                     Value::Str(func_name) => {
-                        let mut args = Vec::with_capacity(n);
-                        for _ in 0..n {
+                        let mut args = Vec::with_capacity(*n);
+                        for _ in 0..*n {
                             args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for CallFunc".to_string())?);
                         }
                         args.reverse();
                         self.run_func(&func_name, args, code)?;
                     }
                     Value::Fn(target_ip) => {
-                        let mut args = Vec::with_capacity(n);
-                        for _ in 0..n {
+                        let mut args = Vec::with_capacity(*n);
+                        for _ in 0..*n {
                             args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for user function".to_string())?);
                         }
                         args.reverse();
