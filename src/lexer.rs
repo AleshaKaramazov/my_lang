@@ -12,10 +12,14 @@ pub enum Token<'a> {
     If,
     Else,
     While, 
+    Break,
+    Continue,
     For,
     In,
+    Loop,
     Inc, 
     Dec, 
+    Return,
     LBracket,
     RBracket, 
     TypeNumber,
@@ -313,6 +317,9 @@ impl<'a> Lexer<'a> {
         
         match s {
             "let" => Token::Let,
+            "continue" => Token::Continue,
+            "break" => Token::Break,
+            "return" => Token::Return,
             "Ok" => Token::Ok,
             "match" => Token::Match,
             "Some" => Token::Some,
@@ -322,6 +329,7 @@ impl<'a> Lexer<'a> {
             "else" => Token::Else,
 
             "while" => Token::While,
+            "loop" => Token::Loop,
             "for" => Token::For,
             "in" => Token::In,
 

@@ -5,10 +5,11 @@ pub struct Compiler<'a> {
     code: Vec<Op<'a>>,
     current_token: Token<'a>,
     lexer: Lexer<'a>,
-    variables: FxHashMap<&'a str, (usize, usize)>,
+    variables: FxHashMap<&'a str, (usize, usize, Option<Type>)>,
     next_slot: usize,
     scope_depth: usize,
     scope_changes: Vec<(&'a str, Option<(usize, usize)>)>,
+    loop_contexts: Vec<(usize, Vec<usize>)>,
 }
 
 impl<'a> Compiler<'a> {
@@ -22,6 +23,7 @@ impl<'a> Compiler<'a> {
             next_slot: 0,
             scope_depth: 0,
             scope_changes: Vec::new(),
+            loop_contexts: Vec::new(),
         }
     }
 
@@ -59,11 +61,10 @@ impl<'a> Compiler<'a> {
         self.advance_token(); 
         
         let loop_var = match self.current_token {
-            Token::Ident(name) => name,
-            _ => return Err("Expected identifier after 'for'".to_string()),
+            Token::Ident(name) => Some(name),
+            _ => None,
         };
         self.advance_token();
-        
         self.expect(Token::In)?; 
         
         self.parse_expression()?;     
@@ -72,30 +73,44 @@ impl<'a> Compiler<'a> {
         let loop_start = self.code.len();
         let exit_jump = self.add_plug(Op::IterNext(0)); 
         
-        let var_id = self.next_slot;
-        self.next_slot += 1;
-        let old_val = self.variables.insert(loop_var, (var_id, self.scope_depth));
+        self.loop_contexts.push((loop_start, Vec::new()));
         
-        if self.scope_depth == 0 {
-            self.code.push(Op::StoreGlobal(var_id));
+        let old_val = if let Some(loop_var) = loop_var {
+            let var_id = self.next_slot;
+            self.next_slot += 1;
+            let old_val = self.variables.insert(loop_var, (var_id, self.scope_depth, None));
+
+            if self.scope_depth == 0 {
+                self.code.push(Op::StoreGlobal(var_id));
+            } else {
+                self.code.push(Op::StoreLocal(var_id));
+            }
+            Some(old_val)
         } else {
-            self.code.push(Op::StoreLocal(var_id));
-        }
-        
+            self.code.push(Op::Pop);
+            None
+        };
+
         self.parse_block()?;
         
-        self.code.push(Op::Pop); 
+        self.code.push(Op::Pop);
         self.code.push(Op::Jump(loop_start));
         self.patch_plug(exit_jump);
         
-        self.code.push(Op::Pop);
-        if let Some(prev) = old_val {
-            self.variables.insert(loop_var, prev);
-        } else {
-            self.variables.remove(loop_var);
+        let (_, break_plugs) = self.loop_contexts.pop().unwrap();
+        for b in break_plugs {
+            self.patch_plug(b);
         }
-        self.next_slot -= 1;
         
+        self.code.push(Op::Pop); 
+        if let Some(old_val) = old_val {
+            if let Some(prev) = old_val {
+                self.variables.insert(loop_var.unwrap(), prev);
+            } else {
+                self.variables.remove(loop_var.unwrap());
+            }
+            self.next_slot -= 1;
+        }
         Ok(())
     }
 
@@ -292,7 +307,7 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 
-                let (var_id, var_depth) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+                let (var_id, var_depth, _) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
                 let is_global = var_depth == 0;
                 
                 let store_var = if self.current_token == Token::LBracket {
@@ -414,7 +429,7 @@ impl<'a> Compiler<'a> {
                 let var_id = self.next_slot;
                 self.next_slot += 1;
 
-                let old_val = self.variables.insert(name, (var_id, self.scope_depth));
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
                 self.scope_changes.push((name, old_val));
 
                 if self.scope_depth == 0 {
@@ -505,7 +520,7 @@ impl<'a> Compiler<'a> {
         let res = match self.current_token {
             Token::TypeNumber => Type::Number,
             Token::TypeStr => Type::Str,
-            Token::TypeBool => Type::Str,
+            Token::TypeBool => Type::Bool,
             Token::TypeChar => Type::Char,
             Token::TypeSet => {
                 self.advance_token();
@@ -555,7 +570,7 @@ impl<'a> Compiler<'a> {
         let var_id = self.next_slot;
         self.next_slot += 1;
 
-        let old_value = self.variables.insert(name, (var_id, self.scope_depth));
+        let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(one, two, _)| (one, two));
         self.scope_changes.push((name, old_value));
 
         if let Some(tp) = tp {
@@ -575,7 +590,7 @@ impl<'a> Compiler<'a> {
         let func_id = if let Some(name) = func_name {
             let id = self.next_slot;
             self.next_slot += 1;
-            let old_func_val = self.variables.insert(name, (id, self.scope_depth));
+            let old_func_val = self.variables.insert(name, (id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
             self.scope_changes.push((name, old_func_val));
             Some(id)
         } else {
@@ -614,7 +629,7 @@ impl<'a> Compiler<'a> {
                 let arg_slot = self.next_slot;
                 self.next_slot += 1;
 
-                old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
+                old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth, arg_type.clone())));
                 old_names.push(arg_name);
                 arg_types.push((arg_slot, arg_type)); 
                 
@@ -640,12 +655,13 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        self.parse_block()?;        self.code.push(Op::ExpectType(exp));
+        self.parse_block()?;        
+        self.code.push(Op::ExpectType(exp));
         self.code.push(Op::Return);
 
         for (pos, old_val) in old_vals.iter().enumerate() {
             if let Some(prev) = old_val {
-                self.variables.insert(old_names[pos], *prev);
+                self.variables.insert(old_names[pos], prev.clone());
             } else {
                 self.variables.remove(old_names[pos]);
             }
@@ -653,7 +669,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val {
+                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
                     self.variables.insert(name, prev_slot); 
                 } else {
                     self.variables.remove(name); 
@@ -700,6 +716,10 @@ impl<'a> Compiler<'a> {
                     self.parse_match()?;
                     has_expression_value = true;
                 }
+                Token::Loop => {
+                    self.parse_loop()?;
+                    has_expression_value = false;
+                }
                 Token::While => {
                     self.parse_while()?;
                     has_expression_value = false;
@@ -708,6 +728,33 @@ impl<'a> Compiler<'a> {
                     self.parse_block()?;
                     self.code.push(Op::Pop);
                     has_expression_value = true;
+                }
+                Token::Break => {
+                    self.advance_token();
+                    let plug = self.add_plug(Op::Jump(0));
+                    if let Some((_, break_plugs)) = self.loop_contexts.last_mut() {
+                        break_plugs.push(plug);
+                    } else {
+                        return Err("Keyword 'break' used outside of a loop".to_string());
+                    }
+                    self.next_if(Token::Semicolon);
+                    has_expression_value = true; 
+                }
+                Token::Continue => {
+                    self.advance_token();
+                    if let Some(&(continue_target, _)) = self.loop_contexts.last() {
+                        self.code.push(Op::Jump(continue_target));
+                    } else {
+                        return Err("Keyword 'continue' used outside of a loop".to_string());
+                    }
+                    self.next_if(Token::Semicolon);
+                    has_expression_value = true; 
+                }
+                Token::Return => {
+                    self.advance_token();
+                    self.parse_expression()?;
+                    self.next_if(Token::Semicolon);
+                    self.code.push(Op::Return);
                 }
                 _ => {
                     self.parse_expression()?;
@@ -738,7 +785,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val {
+                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
                     self.variables.insert(name, prev_slot); 
                 } else {
                     self.variables.remove(name); 
@@ -753,7 +800,11 @@ impl<'a> Compiler<'a> {
 
     pub fn parse_match(&mut self) -> Result<(), String> {
         self.advance_token();
-        self.parse_expression()?;
+        if self.next_if(Token::UnderScope) {
+            self.code.push(Op::PushVoid);
+        } else {
+            self.parse_expression()?;
+        }
         self.expect(Token::Begin)?;
 
         let mut end_jumps = Vec::new();
@@ -789,7 +840,7 @@ impl<'a> Compiler<'a> {
                     let var_id = self.next_slot;
                     self.next_slot += 1;
 
-                    let old_val = self.variables.insert(name, (var_id, self.scope_depth));
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(x, y, _)| (x, y));
                     self.scope_changes.push((name, old_val));
 
                     if self.scope_depth == 0 {
@@ -857,14 +908,14 @@ impl<'a> Compiler<'a> {
             self.expect(Token::FatArrow)?;
 
             self.code.push(Op::Pop);
-            self.parse_expression()?;
+            self.parse_block()?;
             self.next_if(Token::Comma);
 
             end_jumps.push(self.add_plug(Op::Jump(0)));
 
             while self.scope_changes.len() > start_change_idx {
                 if let Some((name, old_val)) = self.scope_changes.pop() {
-                    if let Some(prev_slot) = old_val {
+                    if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
                         self.variables.insert(name, prev_slot);
                     } else {
                         self.variables.remove(name);
@@ -914,7 +965,7 @@ impl<'a> Compiler<'a> {
             self.next_if(Token::Comma);
         }
 
-        if let Some(&(id, depth)) = self.variables.get(name) {
+        if let Some(&(id, depth, _)) = self.variables.get(name) {
             if depth == 0 {
                 self.code.push(Op::LoadGlobal(id));
             } else {
@@ -936,8 +987,8 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
-        let (var_id, var_depth) = match self.variables.get(name){
-            Some((vid, vd)) => (*vid, *vd),
+        let (var_id, var_depth, var_type) = match self.variables.get(name){
+            Some((vid, vd, var_type)) => (*vid, *vd, var_type.clone()),
             None => return self.parse_let(name),
         };
         let is_global = var_depth == 0;
@@ -964,6 +1015,9 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.parse_expression()?;
 
+                if let Some(ty) = var_type {
+                    self.code.push(Op::ExpectType(ty.clone()));
+                }
                 if store_var != 0 {
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {
@@ -995,7 +1049,12 @@ impl<'a> Compiler<'a> {
                     self.code.push(Op::DupTarget(store_var));
                     self.code.push(Op::LoadIndex(store_var));
                     self.parse_expression()?;              
-                    self.code.push(op);                    
+                    self.code.push(op);
+
+                    if let Some(ref ty) = var_type {
+                        self.code.push(Op::ExpectType(ty.clone()));
+                    }
+
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
@@ -1010,6 +1069,10 @@ impl<'a> Compiler<'a> {
                     }
                     self.parse_expression()?;              
                     self.code.push(op);                    
+                    if let Some(ref ty) = var_type {
+                        self.code.push(Op::ExpectType(ty.clone()));
+                    }
+
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
@@ -1071,11 +1134,30 @@ impl<'a> Compiler<'a> {
         
         Ok(())
     }
+
+    pub fn parse_loop(&mut self) -> Result<(), String> {
+        self.advance_token();
+        
+        let jump_index = self.code.len();
+        self.loop_contexts.push((jump_index, Vec::new()));
+        self.parse_block()?;
+        self.code.push(Op::Pop);
+        self.code.push(Op::Jump(jump_index));
+
+        let (_, break_plugs) = self.loop_contexts.pop().unwrap();
+        for b in break_plugs {
+            self.patch_plug(b);
+        }
+
+        Ok(()) 
+    }
     
     pub fn parse_while(&mut self) -> Result<(), String> {
         self.advance_token();
         
         let jump_index = self.code.len();
+        self.loop_contexts.push((jump_index, Vec::new()));
+
         self.parse_expression()?;
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
@@ -1084,6 +1166,12 @@ impl<'a> Compiler<'a> {
         self.code.push(Op::Jump(jump_index));
 
         self.patch_plug(plug);
+        
+        let (_, break_plugs) = self.loop_contexts.pop().unwrap();
+        for b in break_plugs {
+            self.patch_plug(b);
+        }
+
         Ok(()) 
     }
 
