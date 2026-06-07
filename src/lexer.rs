@@ -14,7 +14,6 @@ pub enum Token<'a> {
     While, 
     For,
     In,
-    Func,
     Inc, 
     Dec, 
     LBracket,
@@ -193,7 +192,11 @@ impl<'a> Lexer<'a> {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             '&' => self.match_mext_if_else('&', Token::LogicalAnd, Token::ArifmAnd),
-            '<' => self.match_mext_if_else('=', Token::LessOrEqual, Token::Less),
+            '<' => {
+                if self.match_next('=') { Token::LessOrEqual }
+                else if self.match_next('-') { Token::Assign }
+                else { Token::Less }
+            }
             '^' => Token::Pow,
             '>' => self.match_mext_if_else('=', Token::GreaterOrEqual, Token::Greater),
             '{' => Token::Begin,
@@ -317,7 +320,6 @@ impl<'a> Lexer<'a> {
 
             "while" => Token::While,
             "for" => Token::For,
-            "fn" => Token::Func,
             "in" => Token::In,
 
             "Number" | "Num" => Token::TypeNumber,

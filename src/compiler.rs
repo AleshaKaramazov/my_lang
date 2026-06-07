@@ -371,7 +371,7 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::PushStr(s));
             }
             Token::ArifmOr | Token::Or => {
-                self.parse_fn(None, true)?;
+                self.parse_fn(None)?;
             }
             Token::Ok | Token::Some | Token::Err => {
                 let oper = match self.current_token {
@@ -401,7 +401,7 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 self.expect(Token::RParen)?;
-                self.expect(Token::Assign)?;
+                self.next_if(Token::Assign); self.next_if(Token::Arrow);
                 self.parse_expression()?;
 
                 let fail_jump = self.code.len();
@@ -501,15 +501,14 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_let(&mut self) -> Result<(), String> {
-        self.advance_token(); 
-        let name = match self.current_token {
-            Token::Ident(name) => name,
-            _ => return Err("Expected identifier after 'let'".to_string()),
-        };
-        self.advance_token(); 
-
+    fn parse_let(&mut self, name: &'a str) -> Result<(), String> {
         self.expect(Token::Assign)?;
+
+        if matches!(self.current_token, Token::ArifmOr | Token::Or) {
+            self.parse_fn(Some(name))?;
+            self.code.push(Op::PushVoid); 
+            return Ok(());
+        } 
         self.parse_expression()?;
         self.next_if(Token::Semicolon);
 
@@ -525,10 +524,11 @@ impl<'a> Compiler<'a> {
             self.code.push(Op::StoreLocal(var_id));
         }
 
+        self.code.push(Op::PushVoid);
         Ok(())
     }
 
-    pub fn parse_fn(&mut self, func_name: Option<&'a str>, is_anonymous: bool) -> Result<(), String> {
+    pub fn parse_fn(&mut self, func_name: Option<&'a str>) -> Result<(), String> {
         let func_id = if let Some(name) = func_name {
             let id = self.next_slot;
             self.next_slot += 1;
@@ -551,36 +551,14 @@ impl<'a> Compiler<'a> {
         let mut old_vals = vec![];
         let mut old_names = vec![];
         
-        if is_anonymous {
-            if self.current_token == Token::ArifmOr {
-                self.advance_token();
-                while self.current_token != Token::ArifmOr {
-                    let arg_name = if let Token::Ident(name) = self.current_token {
-                        self.advance_token();
-                        name
-                    } else {
-                        return Err("Need name after '|'".to_string());
-                    }; 
-                    
-                    let arg_slot = self.next_slot;
-                    self.next_slot += 1;
-                    
-                    old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
-                    old_names.push(arg_name);
-                    self.next_if(Token::Comma);
-                }
-                self.expect(Token::ArifmOr)?;
-            } else if self.current_token == Token::Or {
-                self.advance_token();
-            }
-        } else {
-            self.expect(Token::LParen)?;
-            while !self.next_if(Token::RParen) {
+        if self.current_token == Token::ArifmOr {
+            self.advance_token();
+            while self.current_token != Token::ArifmOr {
                 let arg_name = if let Token::Ident(name) = self.current_token {
                     self.advance_token();
                     name
                 } else {
-                    return Err("Need name after '(..'".to_string());
+                    return Err("Need name after '|'".to_string());
                 }; 
                 
                 let arg_slot = self.next_slot;
@@ -590,8 +568,10 @@ impl<'a> Compiler<'a> {
                 old_names.push(arg_name);
                 self.next_if(Token::Comma);
             }
+            self.expect(Token::ArifmOr)?;
+        } else if self.current_token == Token::Or {
+            self.advance_token();
         }
-        
         self.parse_block()?;
 
         self.code.push(Op::Return);
@@ -627,11 +607,11 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::StoreLocal(id));
             }
         }
-        
         Ok(())
     }
 
     pub fn parse_block(&mut self) -> Result<(), String> {
+        self.next_if(Token::FatArrow);
         let was_open = self.next_if(Token::Begin);
 
         let old_next_slot = self.next_slot;
@@ -641,27 +621,12 @@ impl<'a> Compiler<'a> {
 
         while self.current_token != Token::End && self.current_token != Token::Eof {
             match self.current_token {
-                Token::Let => {
-                    self.parse_let()?;
-                    has_expression_value = false;
-                }
                 Token::If => {
                     self.parse_if(false)?;
                     has_expression_value = true;
                 }
                 Token::For => {
                     self.parse_for()?;
-                    has_expression_value = false;
-                }
-                Token::Func => {
-                    self.advance_token();
-                    let func_name = if let Token::Ident(name) = self.current_token {
-                        self.advance_token();
-                        Some(name)
-                    } else {
-                        return Err("Need name after 'fn'".to_string());
-                    };
-                    self.parse_fn(func_name, false)?;
                     has_expression_value = false;
                 }
                 Token::Match => {
@@ -684,11 +649,13 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::Pop);
                         has_expression_value = false;
                     } else {
-                        has_expression_value = true;
-                        if !matches!(self.current_token, Token::End | Token::Eof) && was_open {
-                            return Err(format!("Expected ';' after expression or end of block, got: {:?}", self.current_token));
+                        if matches!(self.current_token, Token::End | Token::Eof) || !was_open {
+                            has_expression_value = true;
+                            break;
+                        } else {
+                            self.code.push(Op::Pop);
+                            has_expression_value = false;
                         }
-                        break;
                     }
                 }
             }
@@ -902,7 +869,10 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
-        let (var_id, var_depth) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+        let (var_id, var_depth) = match self.variables.get(name){
+            Some((vid, vd)) => (*vid, *vd),
+            None => return self.parse_let(name),
+        };
         let is_global = var_depth == 0;
 
         let store_var = if self.current_token == Token::LBracket {

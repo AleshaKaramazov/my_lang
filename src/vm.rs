@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use crate::{consts, op::Op, value::Value};
 
 pub struct VM {
@@ -319,6 +321,33 @@ impl<'a> VM {
                     _ => return Err("can't push".to_string()),
                 }
                 self.stack.push(Value::Void);
+            }
+            "readln" => {
+                for (i, arg) in args.iter().enumerate() {
+                    print!("{}", arg);
+                    if i < args.len() - 1 {
+                        print!(" ");
+                    }
+                }
+                let _ = std::io::stdout().flush();
+                let mut s = String::new();
+                let _ = std::io::stdin().read_line(&mut s);
+                self.stack.push(Value::Str(s.trim().to_string()));
+            }
+            "parse" => {
+                let res = match &args[0] {
+                    Value::Str(s) => s.parse(),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Str(s) => s.parse(),
+                        unk => return Err(format!("can't parse: {}", unk)),
+                    }
+                    _ => return Err("can't get parse".to_string()),
+                };
+                let res = match res {
+                    Ok(num) => Value::Result(Box::new(Ok(Value::Number(num)))),
+                    Err(e) => Value::Result(Box::new(Err(Value::Str(e.to_string())))),
+                };
+                self.stack.push(res);
             }
             "step" => {
                 let mut arg = if let Value::Range(i) = &args[0] {
