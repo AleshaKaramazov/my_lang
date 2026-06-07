@@ -1,4 +1,4 @@
-use crate::{consts, lexer::{Lexer, Token}, op::Op};
+use crate::{consts, lexer::{Lexer, Token}, op::Op, types::Type};
 use rustc_hash::FxHashMap;
 
 pub struct Compiler<'a> {
@@ -371,7 +371,7 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::PushStr(s));
             }
             Token::ArifmOr | Token::Or => {
-                self.parse_fn(None)?;
+                self.parse_fn(None, None)?;
             }
             Token::Ok | Token::Some | Token::Err => {
                 let oper = match self.current_token {
@@ -501,11 +501,25 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    fn parse_type(&mut self) -> Result<Type, String> {
+        let res = match self.current_token {
+            Token::TypeNumber => Type::Number,
+            _ => return Err("Unknown type".to_string()),
+        };
+        self.advance_token();
+        Ok(res)
+    }
+
     fn parse_let(&mut self, name: &'a str) -> Result<(), String> {
+        let tp = if self.next_if(Token::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         self.expect(Token::Assign)?;
 
         if matches!(self.current_token, Token::ArifmOr | Token::Or) {
-            self.parse_fn(Some(name))?;
+            self.parse_fn(Some(name), tp)?;
             self.code.push(Op::PushVoid); 
             return Ok(());
         } 
@@ -518,6 +532,9 @@ impl<'a> Compiler<'a> {
         let old_value = self.variables.insert(name, (var_id, self.scope_depth));
         self.scope_changes.push((name, old_value));
 
+        if let Some(tp) = tp {
+            self.code.push(Op::ExpectType(tp));
+        }
         if self.scope_depth == 0 {
             self.code.push(Op::StoreGlobal(var_id));
         } else {
@@ -528,7 +545,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_fn(&mut self, func_name: Option<&'a str>) -> Result<(), String> {
+    pub fn parse_fn(&mut self, func_name: Option<&'a str>, exp: Option<Type>) -> Result<(), String> {
         let func_id = if let Some(name) = func_name {
             let id = self.next_slot;
             self.next_slot += 1;
@@ -563,7 +580,7 @@ impl<'a> Compiler<'a> {
                 
                 let arg_slot = self.next_slot;
                 self.next_slot += 1;
-                
+
                 old_vals.push(self.variables.insert(arg_name, (arg_slot, self.scope_depth)));
                 old_names.push(arg_name);
                 self.next_if(Token::Comma);
@@ -572,8 +589,16 @@ impl<'a> Compiler<'a> {
         } else if self.current_token == Token::Or {
             self.advance_token();
         }
+
+        let exp = if let Some(tp) = exp {
+            tp
+        } else {
+            self.expect(Token::Arrow)?;
+            self.parse_type()?
+        };
         self.parse_block()?;
 
+        self.code.push(Op::ExpectType(exp));
         self.code.push(Op::Return);
 
         for (pos, old_val) in old_vals.iter().enumerate() {

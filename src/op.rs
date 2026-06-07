@@ -1,3 +1,5 @@
+use crate::types::Type;
+
 
 
 #[derive(Debug, Clone, Copy)]
@@ -32,6 +34,7 @@ pub enum Op<'a> {
     Pow,
     Div,
     Mod,
+    ExpectType(Type),
     MakeSet(usize),
     MakeIter,
     IterNext(usize),

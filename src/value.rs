@@ -2,6 +2,8 @@ use std::ops::{Add, Sub, Mul, Div};
 use std::cmp::Ordering;
 use std::vec::IntoIter;
 
+use crate::types::Type;
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Void,
@@ -60,6 +62,15 @@ impl<'a> Value {
             Value::Number(n) => *n != 0,
             Value::Char(_) => true,
             Value::Str(s) => !s.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn this_type(&self, tp: Type) -> bool {
+        match (self, tp) {
+            (Value::Number(_), Type::Number) => true,
+            (Value::Str(_), Type::Str) => true,
+            (Value::Bool(_), Type::Bool) => true,
             _ => false,
         }
     }

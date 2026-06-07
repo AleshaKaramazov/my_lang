@@ -4,13 +4,17 @@ mod op;
 mod consts;
 mod vm;
 mod value;
+mod types;
 
 fn main() {
-    let code = r#"
-        
-    "#;
-
-    let q = compiler::Compiler::new(code);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let code = if let Ok(text) = std::fs::read_to_string(&args[0]) {
+        text
+    } else {
+        println!("error reading : {}", args[1]);
+        return
+    };
+    let q = compiler::Compiler::new(&code);
     match q.compile() {
         Ok(code) => {
             for (pos, op) in code.iter().enumerate() {

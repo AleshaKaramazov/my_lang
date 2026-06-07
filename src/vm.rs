@@ -39,6 +39,12 @@ impl<'a> VM {
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
             }
+            Op::ExpectType(tp) => {
+                let val = self.stack.last().unwrap();
+                if !val.this_type(tp) {
+                    return Err(format!("Expected type: '{:?}', finded: '{:?}'", tp, val));
+                }
+            }
             Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
                 let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
