@@ -29,6 +29,7 @@ impl<'a> VM {
     pub fn step(&mut self, code: &[Op<'a>], ip: &mut usize) -> Result<(), String> {
         let op = &code[*ip];
         match op {
+            Op::PushFLoat(f) => self.stack.push(Value::Float(*f)),
             Op::PushStr(s) => self.stack.push(Value::Str(s.to_string())),
             Op::PushChar(c) => self.stack.push(Value::Char(*c)),
             Op::PushNumber(n) => self.stack.push(Value::Number(*n)),

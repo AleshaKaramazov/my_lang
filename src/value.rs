@@ -2,6 +2,8 @@ use std::ops::{Add, Sub, Mul, Div};
 use std::cmp::Ordering;
 use std::vec::IntoIter;
 
+use crate::consts;
+use crate::file::FileHandler;
 use crate::types::Type;
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,8 @@ pub enum Value {
     Set(Vec<Value>),
     Result(Box<Result<Value, Value>>),
     Cat(Option<Box<Value>>),
+    File(FileHandler),
+    Float(f64),
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,40 @@ impl Iterator {
     }
 }
 
+impl std::io::Write for Value {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Value::File(f) = self {
+            f.file.borrow_mut().write(buf) 
+        } else if let Value::Str(filepath) = self {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true).append(true).open(filepath) {
+                f.write(buf)
+            }  
+            else {
+                std::io::stdout().write(buf)
+            }
+        } else if let Ok(u) = self.expect_number() {
+            match u {
+                consts::STDERR => std::io::stderr().write(buf),
+                consts::STDOUT  => std::io::stdout().write(buf),
+                unk => Err(std::io::Error::other(format!("output by file descriptor is only for:\n\
+                    STDOUT: 1\nSTDERR: 2\nget: {}", unk))),
+            }
+        } 
+        else {
+            std::io::stdout().write(buf)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Value::File(f) = self {
+            f.file.borrow_mut().flush()
+        } else {
+            std::io::stdout().flush()
+        }
+    }
+}
+
 impl<'a> Value {
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -66,9 +104,22 @@ impl<'a> Value {
         }
     }
 
+    pub fn eval_str(&self) -> Result<&str, String> {
+        match self {
+            Self::Str(s) => Ok(s),
+            unk => Err(format!("can't eval Str, from: {}", unk))
+        }
+    }
+
+    pub fn new_file(filename: &str, opt: i64) -> Result<Self, String> {
+        Ok(Value::File(FileHandler::open(filename, opt)?))
+    }
+
     pub fn this_type(&self, expected: &Type) -> bool {
         match (self, expected) {
             (Value::Number(_), Type::Number) => true,
+            (Value::File(_), Type::File) => true,
+            (Value::Float(_), Type::Float) => true,
             (Value::Void, Type::Void) => true,
             (Value::Str(_), Type::Str) => true,
             (Value::Bool(_), Type::Bool) => true,
@@ -117,6 +168,13 @@ impl<'a> Value {
             }
         }
         Ok(Value::Range(Range { start, end, step: if start > end {-1} else {1} }))
+    }
+
+    pub fn new_control(res: Result<Value, String>) -> Value {
+        Value::Result(Box::new(match res {
+            Ok(res) => Ok(res),
+            Err(er) => Err(Value::Str(er))
+        }))
     }
 
     pub fn make_iter(self) -> Result<Value, String> {
@@ -254,6 +312,8 @@ impl<'a> Value {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::File(file) => write!(f, "{}", file),
+            Self::Float(fl) => write!(f, "{}", fl),
             Self::Void => write!(f, "()",),
             Self::Number(n) => write!(f, "{}", n),
             Self::Bool(b) => write!(f, "{}", b),
@@ -290,6 +350,7 @@ impl<'a> PartialEq for Value {
         match (self, other) {
             (Value::Void, Value::Void) => true,
             (Value::Number(a), Value::Number(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -303,6 +364,9 @@ impl<'a> PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+            (Value::Float(a), Value::Number(b)) => a.partial_cmp(&(*b as f64)),
+            (Value::Number(a), Value::Float(b)) => (*a as f64).partial_cmp(b),
             (Value::Char(a), Value::Char(b)) => a.partial_cmp(b),
             (Value::Str(a), Value::Str(b)) => a.partial_cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.partial_cmp(b),
@@ -316,7 +380,9 @@ impl<'a> Add for Value {
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-            
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a + b as f64)),
+            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
             (Value::Str(a), b) => {
                 Ok(Value::Str(format!("{}{}", a, b)))
             },
@@ -339,6 +405,9 @@ impl<'a> Sub for Value {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a - b as f64)),
+            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
             _ => Err("Runtime Error: Invalid types for subtraction (-)".to_string()),
         }
     }
@@ -349,6 +418,9 @@ impl<'a> Mul for Value {
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a * b as f64)),
+            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
             _ => Err("Runtime Error: Invalid types for multiplication (*)".to_string()),
         }
     }
@@ -360,6 +432,10 @@ impl<'a> Div for Value {
         match (self, rhs) {
             (Value::Number(_), Value::Number(0)) => Err("Runtime Error: Division by zero".to_string()),
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a / b)),
+            (Value::Float(_), Value::Float(0.0)) => Err("Runtime Error: Division by zero".to_string()),
+            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a / b as f64)),
+            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 / b)),
             _ => Err("Runtime Error: Invalid types for division (/)".to_string()),
         }
     }

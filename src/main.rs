@@ -6,6 +6,7 @@ mod vm;
 mod value;
 mod vm_run_func;
 mod types;
+mod file;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

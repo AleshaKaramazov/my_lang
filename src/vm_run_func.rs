@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{fs, io::Write};
 use crate::{
     consts, 
     op::Op, 
@@ -7,7 +7,7 @@ use crate::{
 };
 
 impl<'a> VM {
-    pub fn run_func(&mut self, funcname: &str, args: Vec<Value>, code: &[Op<'a>]) -> Result<(), String> {
+    pub fn run_func(&mut self, funcname: &str, mut args: Vec<Value>, code: &[Op<'a>]) -> Result<(), String> {
          match funcname {
             "len" => {
                 self.need_args(funcname, 1, args.len())?;
@@ -40,6 +40,38 @@ impl<'a> VM {
                     unk => res.starts_with(&unk.to_string()) 
                 };
                 self.stack.push(Value::Bool(res));
+            }
+            "read_chunk" => {
+                
+            }
+            "read" => {
+                self.need_args(funcname, 1, args.len())?;
+                match args[0] {
+                    Value::Ref(i) => {
+                        if let Value::File(f) = &mut self.frame[i] {
+                            let q = f.read();
+                            self.stack.push(q)
+                        } else {
+                            return Err("read - method for file".to_string())  
+                        }
+                    }
+                    _ => {
+                        let filename = args[0].eval_str()?;
+                        let res = fs::read_to_string(filename).map(|x| Value::Str(x)).map_err(|x| x.to_string());
+                        self.stack.push(Value::new_control(res));
+                    }
+                }
+            }
+            "open" => {
+                self.need_args(funcname, 1, args.len())?;
+                let filename = args[0].eval_str()?;
+                let opt = if let Some(i) = args.get(1) {
+                    i.expect_number()?
+                } else {
+                    consts::ALL_FLAGS
+                };
+                let res = Value::new_control(Value::new_file(filename, opt));
+                self.stack.push(res); 
             }
             "is_some" => {
                 self.need_args(funcname, 1, args.len())?;
@@ -104,7 +136,36 @@ impl<'a> VM {
                 arg.step = args[1].expect_number()?;
                 self.stack.push(Value::Range(arg));
             }
+            "lines" => {
+                self.need_args(funcname, 1, args.len())?;
+                let arg = self.deref(&mut args[0]).eval_str()?;
+                let res = Value::Set(arg.lines().map(|x| Value::Str(x.to_string())).collect());
+                self.stack.push(res);
+            }
             "writeln" => {
+                self.need_args(funcname, 1, args.len())?;
+                if let Some((first, rest)) = args.split_first_mut() {
+                    let len = rest.len();
+                    for (i, arg) in rest.iter().enumerate() {
+                        if write!(first, "{}", arg).is_err() {
+                            self.stack.push(Value::Result(Box::new(Err(Value::Str("Error Write".to_string())))));
+                            return Ok(());
+                        }
+                        
+                        if i < len - 1 && write!(first, " ").is_err() {
+                            self.stack.push(Value::Result(Box::new(Err(Value::Str("Error Write".to_string())))));
+                            return Ok(());
+
+                        }
+                    }
+                    if writeln!(first).is_err() {
+                        self.stack.push(Value::Result(Box::new(Err(Value::Str("Error Write".to_string())))));
+                        return Ok(());
+                    }
+                };
+                self.stack.push(Value::Void);
+            }
+            "println" => {
                 for (i, arg) in args.iter().enumerate() {
                     print!("{}", arg);
                     if i < args.len() - 1 {
@@ -217,6 +278,14 @@ impl<'a> VM {
             return Err(format!("function: {} need at least: {} args, have: {}", funcname, need, have)) 
         }
         Ok(())
+    }
+
+    #[inline(always)]
+    pub fn deref(&'a mut self, arg: &'a mut Value) -> &'a Value {
+        match arg {
+            Value::Ref(i) => &mut self.frame[*i],
+            _ => arg,
+        }
     }
 
     pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>) -> Result<(), String> {

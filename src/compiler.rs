@@ -488,6 +488,10 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.code.push(Op::PushNumber(n));
             }
+            Token::Float(f) => {
+                self.advance_token();
+                self.code.push(Op::PushFLoat(f));
+            }
             Token::Bool(b) => {
                 self.advance_token();
                 self.code.push(Op::PushBool(b));
@@ -541,6 +545,8 @@ impl<'a> Compiler<'a> {
             Token::TypeStr => Type::Str,
             Token::TypeBool => Type::Bool,
             Token::TypeChar => Type::Char,
+            Token::TypeFile => Type::File,
+            Token::TypeFloat => Type::Float,
             Token::LParen => {
                 self.advance_token();
                 self.expect(Token::RParen)?;
