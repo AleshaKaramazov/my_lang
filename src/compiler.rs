@@ -16,7 +16,7 @@ impl<'a> Compiler<'a> {
     pub fn new(source: &'a str) -> Self {
         let lexer = Lexer::new(source);
         Self {
-            code: vec![],
+            code: Vec::with_capacity(512),
             current_token: Token::Begin, 
             lexer, 
             variables: FxHashMap::default(),

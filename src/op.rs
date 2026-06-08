@@ -16,7 +16,6 @@ pub enum Op<'a> {
     Dup,
 
     DupTarget(usize),
-    Swap,
     PushFn(usize),
     MakeRange(bool),
     StoreLocal(usize),

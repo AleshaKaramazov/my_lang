@@ -111,6 +111,13 @@ impl<'a> Value {
         }
     }
 
+    pub fn open_file(filename: &str) -> Self {
+        Value::Result(Box::new(
+            FileHandler::new_file(filename)
+                .map(|x| Value::File(x)).map_err(|x| Value::Str(x))
+        ))
+    }
+
     pub fn new_file(filename: &str, opt: i64) -> Result<Self, String> {
         Ok(Value::File(FileHandler::open(filename, opt)?))
     }

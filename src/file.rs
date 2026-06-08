@@ -20,6 +20,16 @@ impl std::fmt::Display for FileHandler {
 }
 
 impl FileHandler {
+    pub fn new_file(filename: &str) -> Result<Self, String> {
+        match File::create(filename) {
+            Ok(file) => Ok(Self {
+                file: Rc::new(RefCell::new(file)),
+                path: filename.into()
+            }),
+            Err(err) => Err(err.to_string())
+        } 
+    }
+
     pub fn open(filename: &str, opt: i64) -> Result<Self, String> {
         let read = consts::READ_FM & opt != 0; 
         let truncate = consts::TRUNCATE_FM & opt != 0;

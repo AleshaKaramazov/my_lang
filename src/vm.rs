@@ -27,7 +27,7 @@ impl<'a> VM {
 
     #[inline(always)]
     pub fn step(&mut self, code: &[Op<'a>], ip: &mut usize) -> Result<(), String> {
-        let op = &code[*ip];
+        let op = unsafe {code.get_unchecked(*ip) } ;
         match op {
             Op::PushFLoat(f) => self.stack.push(Value::Float(*f)),
             Op::PushStr(s) => self.stack.push(Value::Str(s.to_string())),
@@ -130,13 +130,6 @@ impl<'a> VM {
                 let start = self.stack.pop().ok_or("VM Error: Stack underflow on MakeRange")?;
                 self.stack.push(Value::make_range(start, end, *incl)?);
             }
-            Op::Swap => {
-                let len = self.stack.len();
-                if len < 2 {
-                    return Err("VM Error: Stack underflow (Swap)".to_string());
-                }
-                self.stack.swap(len - 1, len - 2);
-            }
             Op::Dup => {
                 let val = self.stack.last().ok_or("VM Error: Stack underflow on Dup")?.clone();
                 self.stack.push(val);
@@ -187,7 +180,7 @@ impl<'a> VM {
                 let start = len - (1 + deep); 
                 let mut to_dup = vec![];
                 for i in start..len {
-                    to_dup.push(self.stack[i].clone());
+                    to_dup.push(unsafe {self.stack.get_unchecked(i)}.clone());
                 }
                 self.stack.extend(to_dup);
             }
@@ -229,27 +222,27 @@ impl<'a> VM {
                 if index >= self.frame.len() {
                     self.frame.resize(index + 1, Value::Void);
                 }
-                self.frame[index] = value;
+                unsafe {*self.frame.get_unchecked_mut(index) = value}
             }
             Op::StoreGlobal(idx) => {
                 let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
                 if *idx >= self.frame.len() {
                     self.frame.resize(idx + 1, Value::Void);
                 }
-                self.frame[*idx] = value;
+                unsafe {*self.frame.get_unchecked_mut(*idx) = value}
             }
             Op::LoadLocal(idx) => {
                 let index = self.now_frame + idx;
                 if index >= self.frame.len() {
                     return Err(format!("VM Error: Uninitialized frame slot {}", idx));
                 }
-                self.stack.push(self.frame[index].clone());
+                self.stack.push(unsafe {self.frame.get_unchecked(index)}.clone());
             }
             Op::LoadGlobal(idx) => {
                 if *idx >= self.frame.len() {
                     return Err(format!("VM Error: Uninitialized global slot {}", idx));
                 }
-                self.stack.push(self.frame[*idx].clone());
+                self.stack.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
             }
             Op::CallFunc(n) => {
                 let func_val = self.stack.pop().ok_or_else(|| "VM Error: Missing function identifier".to_string())?;
