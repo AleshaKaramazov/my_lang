@@ -4,6 +4,7 @@ mod op;
 mod consts;
 mod vm;
 mod value;
+mod vm_run_func;
 mod types;
 
 fn main() {

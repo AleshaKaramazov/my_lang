@@ -131,7 +131,11 @@ impl<'a> Compiler<'a> {
         if self.current_token == Token::DotDot {
             self.advance_token();
             let incl = self.next_if(Token::Assign);
-            self.parse_logical_or()?;
+            if self.current_token == Token::RBracket {
+                self.code.push(Op::PushNumber(i64::MAX)); 
+            } else {
+                self.parse_logical_or()?;
+            }
             self.code.push(Op::MakeRange(incl));
         }
         Ok(())
@@ -388,6 +392,17 @@ impl<'a> Compiler<'a> {
             Token::ArifmOr | Token::Or => {
                 self.parse_fn(None, None)?;
             }
+            Token::DotDot => {
+                self.advance_token();
+                self.code.push(Op::PushNumber(0));
+                let incl = self.next_if(Token::Assign);
+                if self.current_token == Token::RBracket {
+                    self.code.push(Op::PushNumber(i64::MAX)); 
+                } else {
+                    self.parse_expression()?;
+                }
+                self.code.push(Op::MakeRange(incl));
+            }
             Token::Ok | Token::Some | Token::Err => {
                 let oper = match self.current_token {
                     Token::Ok => Op::MakeOk,
@@ -487,8 +502,12 @@ impl<'a> Compiler<'a> {
             Token::Begin => self.parse_block()?,
             Token::LParen => {
                 self.advance_token();
-                self.parse_expression()?;
-                self.expect(Token::RParen)?;
+                if self.next_if(Token::RParen) {
+                    self.code.push(Op::PushVoid);
+                } else {
+                    self.parse_expression()?;
+                    self.expect(Token::RParen)?;
+                }
             }
             _ => return Err(format!("Expected expression, got: {:?}", self.current_token)),
         }
@@ -522,6 +541,11 @@ impl<'a> Compiler<'a> {
             Token::TypeStr => Type::Str,
             Token::TypeBool => Type::Bool,
             Token::TypeChar => Type::Char,
+            Token::LParen => {
+                self.advance_token();
+                self.expect(Token::RParen)?;
+                return Ok(Type::Void);
+            }
             Token::TypeSet => {
                 self.advance_token();
                 self.expect(Token::Less)?;
@@ -545,7 +569,7 @@ impl<'a> Compiler<'a> {
                 self.expect(Token::Greater)?;
                 return Ok(Type::Result(Box::new((ok_tp, err_tp))))
             }
-            _ => return Err("Unknown type".to_string()),
+            tk => return Err(format!("Unknown type, start token: {:?}", tk)),
         };
         self.advance_token();
         Ok(res)
@@ -815,6 +839,22 @@ impl<'a> Compiler<'a> {
             let old_next_slot = self.next_slot;
 
             match self.current_token {
+                Token::Ident(name) => {
+                    self.advance_token();
+                    self.code.push(Op::Dup);
+                    let var_id = self.next_slot;
+                    self.next_slot += 1;
+
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(x, y, _)| (x, y));
+                    self.scope_changes.push((name, old_val));
+
+                    if self.scope_depth == 0 {
+                        self.code.push(Op::StoreGlobal(var_id));
+                    } else {
+                        self.code.push(Op::StoreLocal(var_id));
+                    }
+
+                }
                 Token::Ok | Token::Some | Token::Err => {
                     let is_right = matches!(self.current_token, Token::Ok | Token::Some);
                     self.advance_token();

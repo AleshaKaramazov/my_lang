@@ -217,7 +217,7 @@ impl<'a> VM {
                 } else {
                     let index = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
                     let value = self.stack.pop().ok_or_else(|| "VM Error: No value for LoadIndex".to_string())?;
-                    value.load_index(index)?
+                    value.load_index(&index)?
                 };
                 self.stack.push(res); 
             }

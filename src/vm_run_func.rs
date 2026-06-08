@@ -23,6 +23,36 @@ impl<'a> VM {
                 };
                 self.stack.push(res);
             }
+            "starts_with" => {
+                self.need_args(funcname, 2, args.len())?;
+                let res = match &args[0] {
+                    Value::Str(s) => s,
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Str(s) => s,
+                        unk => return Err(format!("can't check starts_with: {}", unk)),
+                    }
+                    unk => return Err(format!("can't check starts_with: {}", unk)),
+                };
+
+                let res = match &args[1] {
+                    Value::Char(c) => res.starts_with(*c),
+                    Value::Str(c) => res.starts_with(c),
+                    unk => res.starts_with(&unk.to_string()) 
+                };
+                self.stack.push(Value::Bool(res));
+            }
+            "is_some" => {
+                self.need_args(funcname, 1, args.len())?;
+                let res = match &args[0] {
+                    Value::Cat(s) => Value::Bool(s.is_some()),
+                    Value::Ref(idx) => match &self.frame[*idx] {
+                        Value::Cat(s) => Value::Bool(s.is_some()),
+                        unk => return Err(format!("can't get len: {}", unk)),
+                    }
+                    _ => return Err("can't get len".to_string()),
+                };
+                self.stack.push(res);
+            }
             "push" => {
                 self.need_args(funcname, 1, args.len())?;
                 let id = match &args[0] {

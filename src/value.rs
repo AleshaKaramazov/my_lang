@@ -69,6 +69,7 @@ impl<'a> Value {
     pub fn this_type(&self, expected: &Type) -> bool {
         match (self, expected) {
             (Value::Number(_), Type::Number) => true,
+            (Value::Void, Type::Void) => true,
             (Value::Str(_), Type::Str) => true,
             (Value::Bool(_), Type::Bool) => true,
             (Value::Set(arr), Type::Set(inner_type)) => {
@@ -141,12 +142,20 @@ impl<'a> Value {
         Ok(())
     }
 
-    pub fn load_index(&self, index: Self) -> Result<Value, String> {
-        let index = index.expect_number()? as usize;
-        match self {
-            Value::Set(v) => Ok(v[index].clone()),
-            _ => return Err("can't eval index".to_string())
-        }
+    pub fn load_dyap(&self, start: usize, end: usize) -> Result<Value, String> {
+        let res = match self {
+            Value::Set(s) => {
+                let end = if end > s.len() {s.len()} else {end};
+                Value::Set(s[start..end].to_vec())
+            }
+            Value::Str(s) => {
+                let count = s.chars().count();
+                let end = if end > count {count} else {end};
+                Value::Str(s[start..end].to_string())
+            }
+            _ => return Err(format!("can't get dyapazone from: {}", self)),
+        };
+        Ok(res)
     }
 
     pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), String> {
@@ -174,19 +183,37 @@ impl<'a> Value {
     }
 
     pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, String> {
-        let mut current = self;
+        let mut current = self.clone();
 
         for i in index.iter() {
-            let idx = i.expect_number()? as usize;
-            match current {
-                Value::Set(v) => {
-                    current = &v[idx];
-                }
-                _ => return Err("Cannot load index: not a set".to_string()),
-            }
+            current = current.load_index(&i)?.clone();
         }
-
         Ok(current.clone())
+    }
+
+    
+    pub fn load_index(&self, index: &Self) -> Result<Value, String> {
+        let val = match index {
+            Value::Range(r) => {
+                if r.start < 0 || r.end < 0 || r.step < 0 || r.start > r.end {
+                    return Err("now we can't handle that type of dyapazone index".to_string())
+                } 
+                self.load_dyap(r.start as usize, r.end as usize)?
+            } 
+            Value::Number(i) => {
+                match self {
+                    Value::Set(v) =>
+                        v[i.rem_euclid(v.len() as i64) as usize].clone(),
+                    Value::Str(s) => {
+                        let index = i.rem_euclid(s.chars().count() as i64) as usize;
+                        s.chars().nth(index).map(|x| Value::Char(x)).unwrap()
+                    }
+                    _ => return Err("can't eval index".to_string())
+                }
+            }
+            _ => return Err("can't eval index".to_string())
+        };
+        Ok(val)
     }
 
     pub fn arifm_and(self, rhs: Self) -> Result<Value, String> {
