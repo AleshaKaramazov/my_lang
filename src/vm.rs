@@ -146,7 +146,7 @@ impl<'a> VM {
                 self.stack.push(val.make_iter()?);
             }
             Op::IterNext(i) => {
-                let val = self.stack.last_mut().unwrap().next();
+                let val = self.stack.last_mut().unwrap().next()?;
                 match val {
                     Some(val) => self.stack.push(val),
                     None => {
@@ -287,7 +287,6 @@ impl<'a> VM {
             }
             Op::Return => {
                 let return_val = self.stack.pop().ok_or_else(|| "VM Error: No return value on stack".to_string())?;
-                
                 let frame = self.call_stack.pop().ok_or_else(|| "VM Error: Call stack underflow on Return".to_string())?;
                 
                 self.frame.truncate(self.now_frame);

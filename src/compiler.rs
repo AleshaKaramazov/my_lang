@@ -116,7 +116,7 @@ impl<'a> Compiler<'a> {
 
     fn expect(&mut self, token: Token) -> Result<(), String> {
         if !self.next_if(token) {
-            return Err(format!("Expected token {:?}", token)); 
+            return Err(format!("Expected token {:?}, finded: {:?}", token, self.current_token)); 
         } 
         Ok(())
     }
@@ -432,7 +432,8 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.expect(Token::RParen)?;
                 self.next_if(Token::Assign); self.next_if(Token::Arrow);
-                self.parse_expression()?;
+
+                self.parse_equality()?;
 
                 let fail_jump = self.code.len();
                 if is_right {
@@ -733,6 +734,10 @@ impl<'a> Compiler<'a> {
         let mut has_expression_value = false;
 
         while self.current_token != Token::End && self.current_token != Token::Eof {
+            if has_expression_value {
+                self.code.push(Op::Pop);
+                has_expression_value = false;
+            }
             match self.current_token {
                 Token::If => {
                     self.parse_if(false)?;
@@ -1031,6 +1036,8 @@ impl<'a> Compiler<'a> {
         if self.next_if(Token::LParen) {
             self.parse_func_call(name, false)?;
             return Ok(());
+        } else if self.current_token == Token::Colon {
+            return self.parse_let(name);
         }
 
         let (var_id, var_depth, var_type) = match self.variables.get(name){
@@ -1254,10 +1261,25 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn parse_if_branch(&mut self) -> Result<(), String> {
-        self.parse_expression()?;
+        let start_change_idx = self.scope_changes.len();
+        let old_next_slot = self.next_slot;
+
+        self.parse_expression()?; 
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
         self.parse_block()?;
+
+        while self.scope_changes.len() > start_change_idx {
+            if let Some((name, old_val)) = self.scope_changes.pop() {
+                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                    self.variables.insert(name, prev_slot);
+                } else {
+                    self.variables.remove(name);
+                }
+            }
+        }
+        self.next_slot = old_next_slot;
+
         self.code[plug] = Op::JumpIfFalse(self.code.len() + 1);
         Ok(())
     }

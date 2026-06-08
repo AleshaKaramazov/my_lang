@@ -143,10 +143,10 @@ impl<'a> Value {
         }
     }    
 
-    pub fn next(&mut self) -> Option<Value> {
+    pub fn next(&mut self) -> Result<Option<Value>, String> {
         match self {
-            Value::Iter(i) => i.next(),
-            _ => None, 
+            Value::Iter(i) => Ok(i.next()),
+            oth => Err(format!("try to iter: {}", oth))
         }
     }
 

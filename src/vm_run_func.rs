@@ -142,6 +142,28 @@ impl<'a> VM {
                 let res = Value::Set(arg.lines().map(|x| Value::Str(x.to_string())).collect());
                 self.stack.push(res);
             }
+            "contains" => {
+                self.need_args(funcname, 2, args.len())?;
+                let arg = self.deref(&mut args[0]).to_string();
+                let pattern = args[1].to_string();
+
+                let res = if let Some(Value::Bool(i)) = args.get(2) && *i {
+                    if let Some(Value::Bool(i)) = args.get(3) && *i {
+                        arg.to_lowercase().contains(&pattern) 
+                    } else {
+                        arg.to_lowercase().contains(&pattern.to_lowercase()) 
+                    }
+                } else {
+                    arg.contains(&pattern) 
+                };
+                self.stack.push(Value::Bool(res));
+            }
+            "to_lowercase" => {
+                self.need_args(funcname, 1, args.len())?;
+                let arg = self.deref(&mut args[0]).eval_str()?;
+                let res = Value::Str(arg.to_lowercase());
+                self.stack.push(res);
+            }
             "writeln" => {
                 self.need_args(funcname, 1, args.len())?;
                 if let Some((first, rest)) = args.split_first_mut() {
