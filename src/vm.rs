@@ -13,6 +13,8 @@ pub struct VM {
 pub struct CallFrame {
     pub return_ip: usize, 
     pub old_frame: usize, 
+    pub static_link: usize, 
+    pub frame_idx: usize,   
 }
 
 impl<'a> VM {
@@ -25,6 +27,22 @@ impl<'a> VM {
         }
     }
 
+    fn get_frame_base(&self, depth_delta: usize) -> usize {
+        if depth_delta == 0 {
+            return self.now_frame;
+        }
+        let mut current_static_link = self.call_stack.last().unwrap().static_link;
+        
+        for _ in 1..depth_delta {
+            if let Some(f) = self.call_stack.iter().rev().find(|f| f.frame_idx == current_static_link) {
+                current_static_link = f.static_link;
+            } else {
+                break;
+            }
+        }
+        current_static_link
+    }
+
     #[inline(always)]
     pub fn step(&mut self, code: &[Op<'a>], ip: &mut usize) -> Result<(), String> {
         let op = unsafe {code.get_unchecked(*ip) } ;
@@ -34,9 +52,8 @@ impl<'a> VM {
             Op::PushChar(c) => self.stack.push(Value::Char(*c)),
             Op::PushNumber(n) => self.stack.push(Value::Number(*n)),
             Op::PushBool(b) => self.stack.push(Value::Bool(*b)),
-            Op::PushRefLocal(idx) => self.stack.push(Value::Ref(self.now_frame + idx)),
             Op::PushRefGlobal(idx) => self.stack.push(Value::Ref(*idx)),
-            Op::PushFn(id) => self.stack.push(Value::Fn(*id)),
+            Op::PushFn(id) => self.stack.push(Value::Fn(*id, self.now_frame)),
             Op::PushVoid => self.stack.push(Value::Void),
             Op::Pop => {
                 self.stack.pop().ok_or_else(|| "VM Error: Pop from empty stack".to_string())?;
@@ -48,8 +65,8 @@ impl<'a> VM {
                 }
             }
             Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
-                let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
-                let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                let right = unsafe { self.stack.pop().unwrap_unchecked() };
+                let left = unsafe { self.stack.pop().unwrap_unchecked() };
                 let result = match *op {
                     Op::Plus => (left + right)?,
                     Op::Sub => (left - right)?,
@@ -64,8 +81,8 @@ impl<'a> VM {
                 self.stack.push(result);
             }
             Op::Equal | Op::NotEqual | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
-                let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
-                let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
+                let right = unsafe { self.stack.pop().unwrap_unchecked() };
+                let left = unsafe { self.stack.pop().unwrap_unchecked() };
                 
                 let result = match *op {
                     Op::Equal => left == right,
@@ -95,6 +112,12 @@ impl<'a> VM {
                 } else {
                     return Err(format!("VM Error: Try unpack the touple: {}", val));
                 }
+            }
+            Op::LoadGlobal(idx) => {
+                if *idx >= self.frame.len() {
+                    return Err(format!("VM Error: Uninitialized global slot {}", idx));
+                }
+                self.stack.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
             }
             Op::MakeOk => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
@@ -237,34 +260,36 @@ impl<'a> VM {
                 };
                 self.stack.push(res); 
             }
-            Op::StoreLocal(idx) => {
-                let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
-                let index = self.now_frame + idx;
-
-                if index >= self.frame.len() {
-                    self.frame.resize(index + 1, Value::Void);
-                }
-                unsafe {*self.frame.get_unchecked_mut(index) = value}
-            }
-            Op::StoreGlobal(idx) => {
+             Op::StoreGlobal(idx) => {
                 let value = self.stack.pop().ok_or_else(|| "VM Error: No value for StoreLocal".to_string())?;
                 if *idx >= self.frame.len() {
                     self.frame.resize(idx + 1, Value::Void);
                 }
                 unsafe {*self.frame.get_unchecked_mut(*idx) = value}
             }
-            Op::LoadLocal(idx) => {
-                let index = self.now_frame + idx;
+            Op::LoadLocal(idx, depth_delta) => {
+                let base = self.get_frame_base(*depth_delta);
+                let index = base + idx;
                 if index >= self.frame.len() {
                     return Err(format!("VM Error: Uninitialized frame slot {}", idx));
                 }
-                self.stack.push(unsafe {self.frame.get_unchecked(index)}.clone());
+                self.stack.push(unsafe { self.frame.get_unchecked(index) }.clone());
             }
-            Op::LoadGlobal(idx) => {
-                if *idx >= self.frame.len() {
-                    return Err(format!("VM Error: Uninitialized global slot {}", idx));
+
+            Op::StoreLocal(idx, depth_delta) => {
+                let value = self.stack.pop().ok_or("VM Error: No value for StoreLocal")?;
+                let base = self.get_frame_base(*depth_delta);
+                let index = base + idx;
+
+                if index >= self.frame.len() {
+                    self.frame.resize(index + 1, Value::Void);
                 }
-                self.stack.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
+                unsafe { *self.frame.get_unchecked_mut(index) = value; }
+            }
+
+            Op::PushRefLocal(idx, depth_delta) => {
+                let base = self.get_frame_base(*depth_delta);
+                self.stack.push(Value::Ref(base + idx));
             }
             Op::CallFunc(n) => {
                 let func_val = self.stack.pop().ok_or_else(|| "VM Error: Missing function identifier".to_string())?;
@@ -278,22 +303,23 @@ impl<'a> VM {
                         args.reverse();
                         self.run_func(&func_name, args, code)?;
                     }
-                    Value::Fn(target_ip) => {
+                    Value::Fn(target_ip, env_frame) => { 
                         let mut args = Vec::with_capacity(*n);
                         for _ in 0..*n {
-                            args.push(self.stack.pop().ok_or_else(|| "VM Error: Missing argument for user function".to_string())?);
+                            args.push(self.stack.pop().ok_or("VM Error: Missing argument")?);
                         }
                         args.reverse();
 
+                        let next_frame_idx = self.frame.len();
                         self.call_stack.push(CallFrame {
                             return_ip: *ip + 1, 
                             old_frame: self.now_frame,
+                            static_link: env_frame, 
+                            frame_idx: next_frame_idx,
                         });
 
-                        self.now_frame = self.frame.len();
-
+                        self.now_frame = next_frame_idx;
                         self.frame.extend(args);
-
                         *ip = target_ip;
                         return Ok(()); 
                     }

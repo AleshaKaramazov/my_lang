@@ -96,7 +96,7 @@ impl<'a> Compiler<'a> {
                 if self.scope_depth == 0 {
                     self.code.push(Op::StoreGlobal(var_id));
                 } else {
-                    self.code.push(Op::StoreLocal(var_id));
+                    self.code.push(Op::StoreLocal(var_id, 0));
                 }
             }
         } else if loop_vars.len() == 1 {
@@ -109,7 +109,7 @@ impl<'a> Compiler<'a> {
             if self.scope_depth == 0 {
                 self.code.push(Op::StoreGlobal(var_id));
             } else {
-                self.code.push(Op::StoreLocal(var_id));
+                self.code.push(Op::StoreLocal(var_id, 0));
             }
         } else {
             self.code.push(Op::Pop);
@@ -339,13 +339,14 @@ impl<'a> Compiler<'a> {
                 
                 let (var_id, var_depth, _) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
                 let is_global = var_depth == 0;
-                
+                let depth_delta = self.scope_depth - var_depth;
+
                 let store_var = if self.current_token == Token::LBracket {
                     let mut deep: usize = 0;
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
                     } else {
-                        self.code.push(Op::LoadLocal(var_id));
+                        self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
                     while self.next_if(Token::LBracket) {
                         deep += 1;
@@ -370,26 +371,28 @@ impl<'a> Compiler<'a> {
                     if self.scope_depth == 0 {
                         self.code.push(Op::StoreGlobal(temp_slot));
                     } else {
-                        self.code.push(Op::StoreLocal(temp_slot));
+                        self.code.push(Op::StoreLocal(temp_slot, depth_delta));
                     }
                     
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }  
                     
                     if self.scope_depth == 0 {
                         self.code.push(Op::LoadGlobal(temp_slot));
                     } else {
-                        self.code.push(Op::LoadLocal(temp_slot));
+                        self.code.push(Op::LoadLocal(temp_slot, depth_delta));
                     }
+
+                    self.next_slot -= 1;
                 } else {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
                     } else {
-                        self.code.push(Op::LoadLocal(var_id));
+                        self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
                     self.code.push(Op::PushNumber(1));
                     self.code.push(op);
@@ -397,7 +400,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
             }
@@ -461,7 +464,7 @@ impl<'a> Compiler<'a> {
                         if self.scope_depth == 0 {
                             self.code.push(Op::StoreGlobal(var_id));
                         } else {
-                            self.code.push(Op::StoreLocal(var_id));
+                            self.code.push(Op::StoreLocal(var_id, 0));
                         }
 
                         self.code.push(Op::PushBool(true));
@@ -502,7 +505,7 @@ impl<'a> Compiler<'a> {
                 if self.scope_depth == 0 {
                     self.code.push(Op::StoreGlobal(var_id));
                 } else {
-                    self.code.push(Op::StoreLocal(var_id));
+                    self.code.push(Op::StoreLocal(var_id, 0));
                 }
 
                 self.code.push(Op::PushBool(true));
@@ -703,7 +706,7 @@ impl<'a> Compiler<'a> {
                 if self.scope_depth == 0 {
                     self.code.push(Op::StoreGlobal(var_id));
                 } else {
-                    self.code.push(Op::StoreLocal(var_id));
+                    self.code.push(Op::StoreLocal(var_id, 0));
                 }
             }
         } else {
@@ -720,7 +723,7 @@ impl<'a> Compiler<'a> {
             if self.scope_depth == 0 {
                 self.code.push(Op::StoreGlobal(var_id));
             } else {
-                self.code.push(Op::StoreLocal(var_id));
+                self.code.push(Op::StoreLocal(var_id, 0));
             }
         }
 
@@ -791,7 +794,7 @@ impl<'a> Compiler<'a> {
 
         for (slot, ty) in arg_types {
             if let Some(t) = ty {
-                self.code.push(Op::LoadLocal(slot));
+                self.code.push(Op::LoadLocal(slot, 0));
                 self.code.push(Op::ExpectType(t));
                 self.code.push(Op::Pop);
             }
@@ -829,7 +832,7 @@ impl<'a> Compiler<'a> {
             if self.scope_depth == 0 {
                 self.code.push(Op::StoreGlobal(id));
             } else {
-                self.code.push(Op::StoreLocal(id));
+                self.code.push(Op::StoreLocal(id, 0));
             }
         }
         Ok(())
@@ -973,7 +976,7 @@ impl<'a> Compiler<'a> {
                     if self.scope_depth == 0 {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, 0));
                     }
 
                 }
@@ -1018,7 +1021,7 @@ impl<'a> Compiler<'a> {
                     if self.scope_depth == 0 {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, 0));
                     }
                 }
                 Token::UnderScope => {
@@ -1126,10 +1129,10 @@ impl<'a> Compiler<'a> {
             arg_count += 1;
             let op = self.code.last_mut().unwrap();
             match op {
-                Op::LoadLocal(i) => *op = Op::PushRefLocal(*i),   
+                Op::LoadLocal(i, depth_delta) => *op = Op::PushRefLocal(*i, *depth_delta),   
                 Op::LoadGlobal(i) => *op = Op::PushRefGlobal(*i), 
                 _ => {},
-            } 
+            }
         }
         while !self.next_if(Token::RParen) {
             self.parse_expression()?;
@@ -1141,7 +1144,8 @@ impl<'a> Compiler<'a> {
             if depth == 0 {
                 self.code.push(Op::LoadGlobal(id));
             } else {
-                self.code.push(Op::LoadLocal(id));
+                let depth_delta = self.scope_depth - depth;
+                self.code.push(Op::LoadLocal(id, depth_delta));
             }
         } else {
             self.code.push(Op::PushStr(name));
@@ -1169,13 +1173,14 @@ impl<'a> Compiler<'a> {
             None => return Err(format!("can't find {} var", name)),
         };
         let is_global = var_depth == 0;
+        let depth_delta = self.scope_depth - var_depth;
 
         let store_var = if self.current_token == Token::LBracket {
             let mut deep: usize = 0;
             if is_global {
                 self.code.push(Op::LoadGlobal(var_id));
             } else {
-                self.code.push(Op::LoadLocal(var_id));
+                self.code.push(Op::LoadLocal(var_id, depth_delta));
             }
             while self.next_if(Token::LBracket) {
                 deep += 1;
@@ -1200,13 +1205,13 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 } else {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
                 self.code.push(Op::PushVoid);
@@ -1236,13 +1241,13 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 } else {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
                     } else {
-                        self.code.push(Op::LoadLocal(var_id));
+                        self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
                     self.parse_expression()?;              
                     self.code.push(op);                    
@@ -1253,7 +1258,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
                 self.code.push(Op::PushVoid);
@@ -1276,7 +1281,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                     
                     self.code.push(Op::LoadIndex(store_var));
@@ -1284,7 +1289,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
                     } else {
-                        self.code.push(Op::LoadLocal(var_id));
+                        self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
                     self.code.push(Op::Dup); 
                     self.code.push(Op::PushNumber(1));
@@ -1292,7 +1297,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
                     } else {
-                        self.code.push(Op::StoreLocal(var_id));
+                        self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
             }
@@ -1303,7 +1308,7 @@ impl<'a> Compiler<'a> {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
                     } else {
-                        self.code.push(Op::LoadLocal(var_id));
+                        self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
                 }
             }

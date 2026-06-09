@@ -303,15 +303,15 @@ impl<'a> VM {
                     _ => return Err("map requires a set".to_string()),
                 };
                 
-                let lambda_ip = match args[1] {
-                    Value::Fn(ip) => ip,
+                let (lambda_ip, stk) = match args[1] {
+                    Value::Fn(ip, frame) => (ip, frame),
                     _ => return Err("map requires a lambda".to_string()),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let result = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
                     match result {
@@ -337,15 +337,15 @@ impl<'a> VM {
                     _ => return Err("map requires a set".to_string()),
                 };
                 
-                let lambda_ip = match args[1] {
-                    Value::Fn(ip) => ip,
+                let (lambda_ip, stk) = match args[1] {
+                    Value::Fn(ip, stk) => (ip, stk),
                     _ => return Err("map requires a lambda".to_string()),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let result = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
                     result_set.push(result);
@@ -370,15 +370,15 @@ impl<'a> VM {
                     _ => return Err("filter requires a set".to_string()),
                 };
                 
-                let lambda_ip = match args[1] {
-                    Value::Fn(ip) => ip,
+                let (lambda_ip , stk) = match args[1] {
+                    Value::Fn(ip, stk) => (ip, stk),
                     _ => return Err("filter requires a lambda".to_string()),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()])?;
+                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let cond = self.stack.pop().ok_or("VM Error: Expected bool from lambda")?;
                     if cond.is_truthy() {
@@ -408,11 +408,13 @@ impl<'a> VM {
             _ => arg,
         }
     }
-
-    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>) -> Result<(), String> {
+   
+    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, static_link: usize) -> Result<(), String> {
         self.call_stack.push(CallFrame {
             return_ip: consts::STOP_FLAG, 
             old_frame: self.now_frame,
+            static_link,
+            frame_idx: self.frame.len()
         });
 
         self.now_frame = self.frame.len();

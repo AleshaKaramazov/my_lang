@@ -1,14 +1,11 @@
 use crate::types::Type;
 
-
-
 #[derive(Debug, Clone)]
 pub enum Op<'a> {
     PushStr(&'a str),
     PushChar(char),
     PushNumber(i64),
     PushFLoat(f64),
-    PushRefLocal(usize),
     PushRefGlobal(usize),
     PushBool(bool),
     PushVoid,
@@ -19,14 +16,15 @@ pub enum Op<'a> {
     DupTarget(usize),
     PushFn(usize),
     MakeRange(bool),
-    StoreLocal(usize),
-    LoadLocal(usize),
     LoadGlobal(usize),
     StoreGlobal(usize),
     CallFunc(usize),
     JumpIfFalse(usize),
     Jump(usize),
     JumpIfTrue(usize),
+    PushRefLocal(usize, usize),
+    StoreLocal(usize, usize),  
+    LoadLocal(usize, usize),   
     ArifmOr,
     ArifmAnd,
     Not,

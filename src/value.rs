@@ -16,7 +16,7 @@ pub enum Value {
     Ref(usize),
     Range(Range),
     Iter(Iterator),
-    Fn(usize),
+    Fn(usize, usize),
     Set(Vec<Value>),
     Result(Box<Result<Value, Value>>),
     Cat(Option<Box<Value>>),
@@ -348,7 +348,7 @@ impl std::fmt::Display for Value {
             Self::Str(s) => write!(f, "{}", s),
             Self::Range(s) => write!(f, "{}..{}", s.start, s.end),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
-            Self::Fn(i) => write!(f, "FN<ID: {}>", i),
+            Self::Fn(i, _) => write!(f, "FN<ID: {}>", i),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),
             Value::Cat(c) => if let Some(c) = c {
                 write!(f, "Cat<{}>", c)
@@ -372,22 +372,32 @@ impl std::fmt::Display for Value {
     }
 }
 
-impl<'a> PartialEq for Value {
+impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Value::Void, Value::Void) => true,
             (Value::Number(a), Value::Number(b)) => a == b,
             (Value::Float(a), Value::Float(b)) => a == b,
+            
+            (Value::Float(a), Value::Number(b)) => *a == (*b as f64),
+            (Value::Number(a), Value::Float(b)) => (*a as f64) == *b,
+            
             (Value::Char(a), Value::Char(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Ref(a), Value::Ref(b)) => a == b,
+            
+            (Value::Cat(a), Value::Cat(b)) => a == b,
+            (Value::Result(a), Value::Result(b)) => a == b,
+            (Value::Tuple(a), Value::Tuple(b)) => a == b,
+            (Value::Set(a), Value::Set(b)) => a == b,
+            
             _ => false,
         }
     }
 }
 
-impl<'a> PartialOrd for Value {
+impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
@@ -397,6 +407,12 @@ impl<'a> PartialOrd for Value {
             (Value::Char(a), Value::Char(b)) => a.partial_cmp(b),
             (Value::Str(a), Value::Str(b)) => a.partial_cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.partial_cmp(b),
+            
+            (Value::Tuple(a), Value::Tuple(b)) => a.partial_cmp(b),
+            (Value::Set(a), Value::Set(b)) => a.partial_cmp(b),
+            (Value::Cat(a), Value::Cat(b)) => a.partial_cmp(b),
+            (Value::Result(a), Value::Result(b)) => a.partial_cmp(b),
+            
             _ => None, 
         }
     }
