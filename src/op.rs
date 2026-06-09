@@ -43,6 +43,7 @@ pub enum Op<'a> {
     LoadIndex(usize),
     StoreIndex(usize),
     Equal,
+    NotEqual,
     Greater,
     MakeOk,
     MakeErr,

@@ -142,6 +142,7 @@ impl<'a> Value {
             (Value::Void, Type::Void) => true,
             (Value::Str(_), Type::Str) => true,
             (Value::Bool(_), Type::Bool) => true,
+            (Value::Void, Type::Result(inner)) => matches!(inner.0, Type::Void),
             (Value::Set(arr), Type::Set(inner_type)) => {
                 arr.iter().all(|val| val.this_type(inner_type))
             }
@@ -157,7 +158,6 @@ impl<'a> Value {
                     None => true, 
                 }
             }
-            
             _ => false,
         }
     }    

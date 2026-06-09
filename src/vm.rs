@@ -63,13 +63,14 @@ impl<'a> VM {
                 };
                 self.stack.push(result);
             }
-            Op::Equal | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
+            Op::Equal | Op::NotEqual | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
                 let right = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 let left = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 
                 let result = match *op {
                     Op::Equal => left == right,
                     Op::Greater => left > right,
+                    Op::NotEqual => left != right,
                     Op::Less => left < right,
                     Op::GreaterEq => left >= right,
                     Op::LessEq => left <= right,
@@ -133,7 +134,8 @@ impl<'a> VM {
                 match val {
                     Value::Result(inner) => if let Err(inner) = *inner {
                         self.stack.push(inner);
-                    } else {
+                    } 
+                    else {
                         *ip = *target;
                         return Ok(());
                     }

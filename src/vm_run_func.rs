@@ -196,9 +196,11 @@ impl<'a> VM {
                 self.stack.push(Value::Void);
             }
             "readln" => {
-                let format = Self::format(&args)?;
-                print!("{}", format);
-                let _ = std::io::stdout().flush();
+                if !args.is_empty() {
+                    let format = Self::format(&args)?;
+                    print!("{}", format);
+                    let _ = std::io::stdout().flush();
+                }
                 let mut s = String::new();
                 let _ = std::io::stdin().read_line(&mut s);
                 self.stack.push(Value::Str(s.trim().to_string()));

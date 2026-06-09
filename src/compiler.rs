@@ -216,10 +216,11 @@ impl<'a> Compiler<'a> {
     fn parse_equality(&mut self) -> Result<(), String> {
         self.parse_relational()?;
 
-        while self.current_token == Token::Equal { 
+        while self.current_token == Token::Equal || self.current_token == Token::NotEqual { 
+            let op = if self.current_token == Token::Equal {Op::Equal} else {Op::NotEqual};
             self.advance_token();
             self.parse_relational()?;
-            self.code.push(Op::Equal);
+            self.code.push(op);
         }
         Ok(())
     }
@@ -446,7 +447,32 @@ impl<'a> Compiler<'a> {
                 let is_right = match self.current_token {
                     Token::Ok | Token::Some => true,
                     Token::Err => false,
-                    _ => return Err("Expected Ok, Some or Err".to_string()),
+                    Token::Ident(name) => {
+                        self.advance_token();
+                        self.expect(Token::Assign)?;
+                        let var_id = self.next_slot;
+                        self.next_slot += 1;
+
+                        let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
+                        self.scope_changes.push((name, old_val));
+
+                        self.parse_equality()?;
+
+                        if self.scope_depth == 0 {
+                            self.code.push(Op::StoreGlobal(var_id));
+                        } else {
+                            self.code.push(Op::StoreLocal(var_id));
+                        }
+
+                        self.code.push(Op::PushBool(true));
+                        let end_jump = self.add_plug(Op::Jump(0));
+
+                        self.code.push(Op::PushBool(false));
+                        self.patch_plug(end_jump);
+
+                        return Ok(()) 
+                    } 
+                    _ => return Err("Expected Ok, Some or Err or Ident".to_string()),
                 };
                 self.advance_token();
                 self.expect(Token::LParen)?;
@@ -456,7 +482,7 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 self.expect(Token::RParen)?;
-                self.next_if(Token::Assign); self.next_if(Token::Arrow);
+                self.expect(Token::Assign)?;
 
                 self.parse_equality()?;
 
@@ -950,6 +976,16 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::StoreLocal(var_id));
                     }
 
+                }
+                Token::None => {
+                    self.advance_token();
+                    self.code.push(Op::Dup);        
+                    self.code.push(Op::None);       
+                    self.code.push(Op::Equal);      
+
+                    let fail_jump = self.code.len();
+                    self.code.push(Op::JumpIfFalse(0)); 
+                    next_arm_jumps.push(fail_jump);
                 }
                 Token::Ok | Token::Some | Token::Err => {
                     let is_right = matches!(self.current_token, Token::Ok | Token::Some);
