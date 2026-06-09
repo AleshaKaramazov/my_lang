@@ -1,4 +1,4 @@
-use crate::{consts, lexer::{Lexer, Token}, op::Op, types::Type};
+use crate::{consts, errors::CompilerError, lexer::{Lexer, Token}, op::Op, types::Type};
 use rustc_hash::FxHashMap;
 
 pub struct Compiler<'a> {
@@ -57,7 +57,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    pub fn parse_for(&mut self) -> Result<(), String> {
+    pub fn parse_for(&mut self) -> Result<(), CompilerError> {
         self.advance_token(); 
         
         let has_parens = self.next_if(Token::LParen);
@@ -139,18 +139,18 @@ impl<'a> Compiler<'a> {
         Ok(())
     }    
 
-    fn expect(&mut self, token: Token) -> Result<(), String> {
+    fn expect(&mut self, token: Token) -> Result<(), CompilerError> {
         if !self.next_if(token) {
-            return Err(format!("Expected token {:?}, finded: {:?}", token, self.current_token)); 
+            return Err(CompilerError::UnexpectedArg); 
         } 
         Ok(())
     }
 
-    fn parse_expression(&mut self) -> Result<(), String> {
+    fn parse_expression(&mut self) -> Result<(), CompilerError> {
         self.parse_range()
     }
 
-    fn parse_range(&mut self) -> Result<(), String> {
+    fn parse_range(&mut self) -> Result<(), CompilerError> {
         self.parse_logical_or()?;
         
         if self.current_token == Token::DotDot {
@@ -166,7 +166,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_logical_or(&mut self) -> Result<(), String> {
+    fn parse_logical_or(&mut self) -> Result<(), CompilerError> {
         self.parse_logical_and()?;
 
         while self.current_token == Token::Or {
@@ -189,7 +189,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_logical_and(&mut self) -> Result<(), String> {
+    fn parse_logical_and(&mut self) -> Result<(), CompilerError> {
         self.parse_equality()?; 
 
         while self.current_token == Token::LogicalAnd { 
@@ -213,7 +213,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_equality(&mut self) -> Result<(), String> {
+    fn parse_equality(&mut self) -> Result<(), CompilerError> {
         self.parse_relational()?;
 
         while self.current_token == Token::Equal || self.current_token == Token::NotEqual { 
@@ -225,7 +225,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_relational(&mut self) -> Result<(), String> {
+    fn parse_relational(&mut self) -> Result<(), CompilerError> {
         self.parse_arifm_or()?;
         loop {
             match self.current_token {
@@ -254,7 +254,7 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
-    fn parse_arifm_or(&mut self) -> Result<(), String> {
+    fn parse_arifm_or(&mut self) -> Result<(), CompilerError> {
         self.parse_arifm_and()?;
         while self.current_token == Token::ArifmOr {
             self.advance_token();
@@ -264,7 +264,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_arifm_and(&mut self) -> Result<(), String> {
+    fn parse_arifm_and(&mut self) -> Result<(), CompilerError> {
         self.parse_term()?;
         while self.current_token == Token::ArifmAnd {
             self.advance_token();
@@ -274,7 +274,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_term(&mut self) -> Result<(), String> {
+    fn parse_term(&mut self) -> Result<(), CompilerError> {
         self.parse_factor()?;
         while self.current_token == Token::Plus || self.current_token == Token::Minus {
             let is_plus = self.current_token == Token::Plus;
@@ -290,7 +290,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_factor(&mut self) -> Result<(), String> {
+    fn parse_factor(&mut self) -> Result<(), CompilerError> {
         self.parse_power()?;
 
         while self.current_token == Token::Mult || self.current_token == Token::Div {
@@ -307,7 +307,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_power(&mut self) -> Result<(), String> {
+    fn parse_power(&mut self) -> Result<(), CompilerError> {
         self.parse_unary()?;
 
         if self.current_token == Token::Pow || self.current_token == Token::Mod {
@@ -319,7 +319,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_unary(&mut self) -> Result<(), String> {
+    fn parse_unary(&mut self) -> Result<(), CompilerError> {
         match self.current_token {
             Token::Not => {
                 self.advance_token();
@@ -333,11 +333,11 @@ impl<'a> Compiler<'a> {
                 
                 let name = match self.current_token {
                     Token::Ident(n) => n,
-                    _ => return Err(format!("Expected identifier after prefix '{}'", if is_inc { "++" } else { "--" })),
+                    _ => return Err(CompilerError::UnexpectedArg),
                 };
                 self.advance_token();
                 
-                let (var_id, var_depth, _) = *self.variables.get(name).ok_or_else(|| format!("Unknown variable: {}", name))?;
+                let (var_id, var_depth, _) = *self.variables.get(name).ok_or_else(|| CompilerError::UnexpectedArg)?;
                 let is_global = var_depth == 0;
                 let depth_delta = self.scope_depth - var_depth;
 
@@ -412,7 +412,7 @@ impl<'a> Compiler<'a> {
     }
 
    
-    fn parse_primary(&mut self) -> Result<(), String> {
+    fn parse_primary(&mut self) -> Result<(), CompilerError> {
         match self.current_token {
             Token::String(s) => {
                 self.advance_token();
@@ -475,13 +475,13 @@ impl<'a> Compiler<'a> {
 
                         return Ok(()) 
                     } 
-                    _ => return Err("Expected Ok, Some or Err or Ident".to_string()),
+                    _ => return Err(CompilerError::UnexpectedArg),
                 };
                 self.advance_token();
                 self.expect(Token::LParen)?;
                 let name = match self.current_token {
                     Token::Ident(n) => n,
-                    _ => return Err("Expected identifier".to_string()),
+                    _ => return Err(CompilerError::UnexpectedArg),
                 };
                 self.advance_token();
                 self.expect(Token::RParen)?;
@@ -583,7 +583,7 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
-            _ => return Err(format!("Expected expression, got: {:?}", self.current_token)),
+            _ => return Err(CompilerError::UnexpectedArg),
         }
         if self.next_if(Token::LBracket) {
             self.parse_expression()?;
@@ -601,7 +601,7 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 n 
             } else {
-                return Err(format!("Expected NAME, after DOT(.) got: {:?}", self.current_token));
+                return Err(CompilerError::UnexpectedArg);
             };
             self.expect(Token::LParen)?;
             self.parse_func_call(method_name, true)?;
@@ -609,7 +609,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_type(&mut self) -> Result<Type, String> {
+    fn parse_type(&mut self) -> Result<Type, CompilerError> {
         let res = match self.current_token {
             Token::TypeNumber => Type::Number,
             Token::TypeStr => Type::Str,
@@ -645,13 +645,13 @@ impl<'a> Compiler<'a> {
                 self.expect(Token::Greater)?;
                 return Ok(Type::Result(Box::new((ok_tp, err_tp))))
             }
-            tk => return Err(format!("Unknown type, start token: {:?}", tk)),
+            _ => return Err(CompilerError::UnexpectedArg),
         };
         self.advance_token();
         Ok(res)
     }
 
-    fn parse_let(&mut self, first_name: &'a str) -> Result<(), String> {
+    fn parse_let(&mut self, first_name: &'a str) -> Result<(), CompilerError> {
         let mut names = vec![first_name];
         let mut types = vec![];
 
@@ -666,7 +666,7 @@ impl<'a> Compiler<'a> {
             is_tuple = true;
             let next_name = match self.current_token {
                 Token::Ident(n) => n,
-                _ => return Err("Expected identifier in tuple destructuring".to_string()),
+                _ => return Err(CompilerError::UnexpectedArg),
             };
             self.advance_token();
             names.push(next_name);
@@ -731,7 +731,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_fn(&mut self, func_name: Option<&'a str>, exp: Option<Type>) -> Result<(), String> {
+    pub fn parse_fn(&mut self, func_name: Option<&'a str>, exp: Option<Type>) -> Result<(), CompilerError> {
         let func_id = if let Some(name) = func_name {
             let id = self.next_slot;
             self.next_slot += 1;
@@ -762,7 +762,7 @@ impl<'a> Compiler<'a> {
                     self.advance_token();
                     name
                 } else {
-                    return Err("Need name after '|'".to_string());
+                    return Err(CompilerError::UnexpectedArg);
                 }; 
                 
                 let arg_type = if self.next_if(Token::Colon) {
@@ -838,7 +838,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_block(&mut self) -> Result<(), String> {
+    pub fn parse_block(&mut self) -> Result<(), CompilerError> {
         self.next_if(Token::FatArrow);
         let was_open = self.next_if(Token::Begin);
 
@@ -884,7 +884,7 @@ impl<'a> Compiler<'a> {
                     if let Some((_, break_plugs)) = self.loop_contexts.last_mut() {
                         break_plugs.push(plug);
                     } else {
-                        return Err("Keyword 'break' used outside of a loop".to_string());
+                        return Err(CompilerError::UnexpectedArg);
                     }
                     self.next_if(Token::Semicolon);
                     has_expression_value = true; 
@@ -894,7 +894,7 @@ impl<'a> Compiler<'a> {
                     if let Some(&(continue_target, _)) = self.loop_contexts.last() {
                         self.code.push(Op::Jump(continue_target));
                     } else {
-                        return Err("Keyword 'continue' used outside of a loop".to_string());
+                        return Err(CompilerError::UnexpectedArg);
                     }
                     self.next_if(Token::Semicolon);
                     has_expression_value = true; 
@@ -947,7 +947,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_match(&mut self) -> Result<(), String> {
+    pub fn parse_match(&mut self) -> Result<(), CompilerError> {
         self.advance_token();
         if self.next_if(Token::UnderScope) {
             self.code.push(Op::PushVoid);
@@ -997,7 +997,7 @@ impl<'a> Compiler<'a> {
                     
                     let name = match self.current_token {
                         Token::Ident(n) => n,
-                        _ => return Err("Expected identifier".to_string()),
+                        _ => return Err(CompilerError::UnexpectedArg),
                     };
                     self.advance_token();
                     self.expect(Token::RParen)?;
@@ -1051,7 +1051,7 @@ impl<'a> Compiler<'a> {
                                 self.code.push(Op::PushBool(b));
                                 self.advance_token();
                             }
-                            _ => return Err(format!("Expected literal pattern, got {:?}", self.current_token)),
+                            _ => return Err(CompilerError::UnexpectedArg),
                         }
                         
                         self.code.push(Op::Equal);
@@ -1071,7 +1071,7 @@ impl<'a> Compiler<'a> {
                         self.patch_plug(jump);
                     }
                 }
-                _ => return Err(format!("Expected pattern, got {:?}", self.current_token)),
+                _ => return Err(CompilerError::UnexpectedArg),
             }
 
             if self.next_if(Token::If) {
@@ -1123,7 +1123,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), String> {
+    pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), CompilerError> {
         let mut arg_count = 0;
         if first_arg {
             arg_count += 1;
@@ -1155,7 +1155,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_ident(&mut self, name: &'a str) -> Result<(), String> {
+    pub fn parse_ident(&mut self, name: &'a str) -> Result<(), CompilerError> {
         self.advance_token(); 
         
         if self.next_if(Token::LParen) {
@@ -1170,7 +1170,7 @@ impl<'a> Compiler<'a> {
 
         let (var_id, var_depth, var_type) = match self.variables.get(name){
             Some((vid, vd, var_type)) => (*vid, *vd, var_type.clone()),
-            None => return Err(format!("can't find {} var", name)),
+            None => return Err(CompilerError::UnfindedVar),
         };
         let is_global = var_depth == 0;
         let depth_delta = self.scope_depth - var_depth;
@@ -1317,7 +1317,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_loop(&mut self) -> Result<(), String> {
+    pub fn parse_loop(&mut self) -> Result<(), CompilerError> {
         self.advance_token();
         
         let jump_index = self.code.len();
@@ -1334,7 +1334,7 @@ impl<'a> Compiler<'a> {
         Ok(()) 
     }
     
-    pub fn parse_while(&mut self) -> Result<(), String> {
+    pub fn parse_while(&mut self) -> Result<(), CompilerError> {
         self.advance_token();
         
         let jump_index = self.code.len();
@@ -1357,7 +1357,7 @@ impl<'a> Compiler<'a> {
         Ok(()) 
     }
 
-    pub fn parse_if(&mut self, need_else: bool) -> Result<(), String> {
+    pub fn parse_if(&mut self, need_else: bool) -> Result<(), CompilerError> {
         self.advance_token();
         self.parse_if_branch()?;
         
@@ -1376,7 +1376,7 @@ impl<'a> Compiler<'a> {
 
         if !has_else {
             if need_else && self.current_token == Token::End {
-                return Err("need else branch".to_string())
+                return Err(CompilerError::UnexpectedArg)
             } else {
                 self.code.push(Op::PushVoid);
             }
@@ -1389,7 +1389,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_if_branch(&mut self) -> Result<(), String> {
+    pub fn parse_if_branch(&mut self) -> Result<(), CompilerError> {
         let start_change_idx = self.scope_changes.len();
         let old_next_slot = self.next_slot;
 
@@ -1413,7 +1413,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn compile(mut self) -> Result<Vec<Op<'a>>, String> {
+    pub fn compile(mut self) -> Result<Vec<Op<'a>>, CompilerError> {
         self.parse_block()?;
         Ok(self.code)
     }

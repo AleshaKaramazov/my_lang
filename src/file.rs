@@ -5,7 +5,7 @@ use std::{
     path::{PathBuf}, 
     rc::Rc
 };
-use crate::{consts, value::Value};
+use crate::{consts, value::Value, errors::VMError};
 
 #[derive(Debug, Clone)]
 pub struct FileHandler {
@@ -20,17 +20,17 @@ impl std::fmt::Display for FileHandler {
 }
 
 impl FileHandler {
-    pub fn new_file(filename: &str) -> Result<Self, String> {
+    pub fn new_file(filename: &str) -> Result<Self, VMError> {
         match File::create(filename) {
             Ok(file) => Ok(Self {
                 file: Rc::new(RefCell::new(file)),
                 path: filename.into()
             }),
-            Err(err) => Err(err.to_string())
+            Err(_) => Err(VMError::FileError)
         } 
     }
 
-    pub fn open(filename: &str, opt: i64) -> Result<Self, String> {
+    pub fn open(filename: &str, opt: i64) -> Result<Self, VMError> {
         let read = consts::READ_FM & opt != 0; 
         let truncate = consts::TRUNCATE_FM & opt != 0;
         let write = consts::WRITE_FM & opt != 0 || truncate;
@@ -49,7 +49,7 @@ impl FileHandler {
                         path: filename.into()
                     })
                 }
-                Err(e) => Err(format!("error open file({}): {}", filename, e))
+                Err(_) => Err(VMError::FileError)
         }
     }
     

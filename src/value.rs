@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::vec::IntoIter;
 
 use crate::consts;
+use crate::errors::VMError;
 use crate::file::FileHandler;
 use crate::types::Type;
 
@@ -116,21 +117,21 @@ impl<'a> Value {
         }
     }
 
-    pub fn eval_str(&self) -> Result<&str, String> {
+    pub fn eval_str(&self) -> Result<&str, VMError> {
         match self {
             Self::Str(s) => Ok(s),
-            unk => Err(format!("can't eval Str, from: {}", unk))
+            _ => Err(VMError::UnExpectedType)
         }
     }
 
     pub fn open_file(filename: &str) -> Self {
         Value::Result(Box::new(
             FileHandler::new_file(filename)
-                .map(|x| Value::File(x)).map_err(|x| Value::Str(x))
+                .map(|x| Value::File(x)).map_err(|_| Value::Str(format!("error with open file")))
         ))
     }
 
-    pub fn new_file(filename: &str, opt: i64) -> Result<Self, String> {
+    pub fn new_file(filename: &str, opt: i64) -> Result<Self, VMError> {
         Ok(Value::File(FileHandler::open(filename, opt)?))
     }
 
@@ -162,21 +163,21 @@ impl<'a> Value {
         }
     }    
 
-    pub fn next(&mut self) -> Result<Option<Value>, String> {
+    pub fn next(&mut self) -> Result<Option<Value>, VMError> {
         match self {
             Value::Iter(i) => Ok(i.next()),
-            oth => Err(format!("try to iter: {}", oth))
+            _ => Err(VMError::CantIter)
         }
     }
 
-    pub fn expect_number(&self) -> Result<i64, String> {
+    pub fn expect_number(&self) -> Result<i64, VMError> {
         match self {
             Self::Number(i) => Ok(*i),
-            _ => Err(format!("Can't eval number from: {}", self))
+            _ => Err(VMError::UnExpectedType)
         }
     }
 
-    pub fn make_range(start: Value, end: Value, incl: bool) -> Result<Value, String> {
+    pub fn make_range(start: Value, end: Value, incl: bool) -> Result<Value, VMError> {
         let start = start.expect_number()?;
         let mut end = end.expect_number()?;
         if incl {
@@ -196,7 +197,7 @@ impl<'a> Value {
         }))
     }
 
-    pub fn make_iter(self) -> Result<Iterator, String> {
+    pub fn make_iter(self) -> Result<Iterator, VMError> {
         let val = match self {
             Self::Str(s) => {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
@@ -204,22 +205,22 @@ impl<'a> Value {
             }
             Self::Set(i) => Iterator::Set(i.into_iter()),
             Self::Range(range) => Iterator::Range(range),
-            _ => return Err(format!("Can't eval Iterator from: {}", self)),
+            _ => return Err(VMError::UnExpectedType),
         };
 
         Ok(val)
     }
 
-    pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), String> {
+    pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), VMError> {
         let index = index.expect_number()? as usize;
         match self {
             Value::Set(v) => v[index] = to_set,
-            _ => return Err("can't eval index".to_string())
+            _ => return Err(VMError::CantIndex)
         }
         Ok(())
     }
 
-    pub fn load_dyap(&self, start: usize, end: usize) -> Result<Value, String> {
+    pub fn load_dyap(&self, start: usize, end: usize) -> Result<Value, VMError> {
         let res = match self {
             Value::Set(s) => {
                 let end = if end > s.len() {s.len()} else {end};
@@ -230,12 +231,12 @@ impl<'a> Value {
                 let end = if end > count {count} else {end};
                 Value::Str(s[start..end].to_string())
             }
-            _ => return Err(format!("can't get dyapazone from: {}", self)),
+            _ => return Err(VMError::UnExpectedType),
         };
         Ok(res)
     }
 
-    pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), String> {
+    pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), VMError> {
         let mut current = self;
 
         for i in 0..index.len() - 1 {
@@ -244,7 +245,7 @@ impl<'a> Value {
                 Value::Set(v) => {
                     current = &mut v[idx];
                 }
-                _ => return Err("Cannot index into a non-set value".to_string()),
+                _ => return Err(VMError::CantIndex),
             }
         }
 
@@ -253,13 +254,13 @@ impl<'a> Value {
             Value::Set(v) => {
                 v[last_idx] = to_set;
             }
-            _ => return Err("Cannot assign: target is not a set".to_string()),
+            _ => return Err(VMError::CantIndex),
         }
 
         Ok(())
     }
 
-    pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, String> {
+    pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, VMError> {
         let mut current = self.clone();
 
         for i in index.iter() {
@@ -269,11 +270,11 @@ impl<'a> Value {
     }
 
     
-    pub fn load_index(&self, index: &Self) -> Result<Value, String> {
+    pub fn load_index(&self, index: &Self) -> Result<Value, VMError> {
         let val = match index {
             Value::Range(r) => {
                 if r.start < 0 || r.end < 0 || r.step < 0 || r.start > r.end {
-                    return Err("now we can't handle that type of dyapazone index".to_string())
+                    return Err(VMError::CantIndex)
                 } 
                 self.load_dyap(r.start as usize, r.end as usize)?
             } 
@@ -285,45 +286,45 @@ impl<'a> Value {
                         let index = i.rem_euclid(s.chars().count() as i64) as usize;
                         s.chars().nth(index).map(|x| Value::Char(x)).unwrap()
                     }
-                    _ => return Err("can't eval index".to_string())
+                    _ => return Err(VMError::CantIndex)
                 }
             }
-            _ => return Err("can't eval index".to_string())
+            _ => return Err(VMError::CantIndex)
         };
         Ok(val)
     }
 
-    pub fn arifm_and(self, rhs: Self) -> Result<Value, String> {
+    pub fn arifm_and(self, rhs: Self) -> Result<Value, VMError> {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a & b)),
-            _ => Err("Runtime Error: Invalid types for ArifmAnd".to_string()),
+            _ => Err(VMError::NotOperation),
         }
     }
 
-    pub fn arifm_or(self, rhs: Self) -> Result<Value, String> {
+    pub fn arifm_or(self, rhs: Self) -> Result<Value, VMError> {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a | b)),
-            _ => Err("Runtime Error: Invalid types for ArifmOr".to_string()),
+            _ => Err(VMError::NotOperation),
         }
     }
 
-    pub fn arifm_mod(self, rhs: Self) -> Result<Value, String> {
+    pub fn arifm_mod(self, rhs: Self) -> Result<Value, VMError> {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a % b)),
-            _ => Err("Runtime Error: Invalid types for Mod".to_string()),
+            _ => Err(VMError::NotOperation),
         }
     }
 
-    pub fn pow(self, rhs: Self) -> Result<Value, String> {
+    pub fn pow(self, rhs: Self) -> Result<Value, VMError> {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => {
                 if b < 0 {
-                    Err("Runtime Error: Negative exponent is not supported for integers".to_string())
+                    Err(VMError::BadOperand)
                 } else {
                     Ok(Value::Number(a.pow(b as u32)))
                 }
             }
-            _ => Err("Runtime Error: Invalid types for exponentiation (pow)".to_string()),
+            _ => Err(VMError::NotOperation),
         }
     }
 }
@@ -419,7 +420,7 @@ impl PartialOrd for Value {
 }
 
 impl<'a> Add for Value {
-    type Output = Result<Value, String>;
+    type Output = Result<Value, VMError>;
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
@@ -438,48 +439,48 @@ impl<'a> Add for Value {
             (b, Value::Char(a)) => {
                 Ok(Value::Str(format!("{}{}", b, a)))
             }
-            _ => Err("Runtime Error: Invalid types for addition/concatenation (+)".to_string()),
+            _ => Err(VMError::BadOperand),
         }
     }
 }
 
 impl<'a> Sub for Value {
-    type Output = Result<Value, String>;
+    type Output = Result<Value, VMError>;
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
             (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a - b as f64)),
             (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
-            _ => Err("Runtime Error: Invalid types for subtraction (-)".to_string()),
+            _ => Err(VMError::BadOperand),
         }
     }
 }
 
 impl<'a> Mul for Value {
-    type Output = Result<Value, String>;
+    type Output = Result<Value, VMError>;
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
             (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a * b as f64)),
             (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
-            _ => Err("Runtime Error: Invalid types for multiplication (*)".to_string()),
+            _ => Err(VMError::BadOperand),
         }
     }
 }
 
 impl<'a> Div for Value {
-    type Output = Result<Value, String>;
+    type Output = Result<Value, VMError>;
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Value::Number(_), Value::Number(0)) => Err("Runtime Error: Division by zero".to_string()),
+            (Value::Number(_), Value::Number(0)) => Err(VMError::ZeroDiv),
             (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a / b)),
-            (Value::Float(_), Value::Float(0.0)) => Err("Runtime Error: Division by zero".to_string()),
+            (Value::Float(_), Value::Float(0.0)) => Err(VMError::ZeroDiv),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
             (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a / b as f64)),
             (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 / b)),
-            _ => Err("Runtime Error: Invalid types for division (/)".to_string()),
+            _ => Err(VMError::BadOperand),
         }
     }
 }

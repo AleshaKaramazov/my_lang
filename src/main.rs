@@ -7,6 +7,7 @@ mod value;
 mod vm_run_func;
 mod types;
 mod file;
+mod errors;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,9 +26,9 @@ fn main() {
         Ok(code) => {
             let mut vm = vm::VM::new();
             if let Err(e) = vm.run(&code) {
-                println!("error: {}", e)
+                println!("error: {:?}", e)
             }
         }
-        Err(e) => println!("{}", e)
+        Err(e) => println!("{:?}", e)
     }
 }
