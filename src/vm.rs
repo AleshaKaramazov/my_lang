@@ -77,6 +77,24 @@ impl<'a> VM {
                 };
                 self.stack.push(Value::Bool(result));
             }
+            Op::MakeTuple(count) => {
+                let start = self.stack.len() - count;
+                let vals: Vec<Value> = self.stack.drain(start..).collect();
+                self.stack.push(Value::Tuple(vals));
+            }
+            Op::UnpackTuple(count) => {
+                let val = self.stack.pop().ok_or("VM Error: Stack underflow on UnpackTuple")?;
+                if let Value::Tuple(vals) = val {
+                    if vals.len() != *count {
+                        return Err(format!("VM Error: expected touple size {}, got {}", count, vals.len()));
+                    }
+                    for v in vals {
+                        self.stack.push(v);
+                    }
+                } else {
+                    return Err(format!("VM Error: Try unpack the touple: {}", val));
+                }
+            }
             Op::MakeOk => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow")?;
                 self.stack.push(Value::Result(Box::new(Ok(val))));
@@ -136,7 +154,9 @@ impl<'a> VM {
             }
             Op::MakeIter => {
                 let val = self.stack.pop().ok_or("VM Error: Stack underflow on MakeIter")?;
-                self.stack.push(val.make_iter()?);
+                self.stack.push(
+                    if matches!(val, Value::Iter(_)) {val} else {Value::Iter(val.make_iter()?)}
+                );
             }
             Op::IterNext(i) => {
                 let val = self.stack.last_mut().unwrap().next()?;

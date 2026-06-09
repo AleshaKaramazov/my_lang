@@ -22,6 +22,7 @@ pub enum Value {
     Cat(Option<Box<Value>>),
     File(FileHandler),
     Float(f64),
+    Tuple(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,8 @@ pub struct Range {
 pub enum Iterator {
     String(IntoIter<char>),
     Set(IntoIter<Value>),
-    Range(Range)
+    Range(Range),
+    Enumerate(Box<Iterator>, i64),
 }
 
 impl Iterator {
@@ -53,6 +55,16 @@ impl Iterator {
                 range.start += range.step;
                 
                 Some(Value::Number(current))
+            },
+            Self::Enumerate(inner_iter, index) => {
+                if let Some(val) = inner_iter.next() {
+                    let current_idx = *index;
+                    *index += 1; 
+                    
+                    Some(Value::Tuple(vec![Value::Number(current_idx), val]))
+                } else {
+                    None
+                }
             }
         } 
     }
@@ -184,14 +196,14 @@ impl<'a> Value {
         }))
     }
 
-    pub fn make_iter(self) -> Result<Value, String> {
+    pub fn make_iter(self) -> Result<Iterator, String> {
         let val = match self {
             Self::Str(s) => {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
-                Value::Iter(Iterator::String(iter))
+                Iterator::String(iter)
             }
-            Self::Set(i) => Value::Iter(Iterator::Set(i.into_iter())),
-            Self::Range(range) => Value::Iter(Iterator::Range(range)),
+            Self::Set(i) => Iterator::Set(i.into_iter()),
+            Self::Range(range) => Iterator::Range(range),
             _ => return Err(format!("Can't eval Iterator from: {}", self)),
         };
 
@@ -320,6 +332,14 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::File(file) => write!(f, "{}", file),
+            Self::Tuple(t) => {
+                write!(f, "(")?;
+                for (i, val) in t.iter().enumerate() {
+                    write!(f, "{}", val)?;
+                    if i < t.len() - 1 { write!(f, ", ")?; }
+                }
+                write!(f, ")")
+            }
             Self::Float(fl) => write!(f, "{}", fl),
             Self::Void => write!(f, "()",),
             Self::Number(n) => write!(f, "{}", n),

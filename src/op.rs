@@ -14,7 +14,8 @@ pub enum Op<'a> {
     PushVoid,
     Pop,
     Dup,
-
+    MakeTuple(usize),   
+    UnpackTuple(usize),
     DupTarget(usize),
     PushFn(usize),
     MakeRange(bool),

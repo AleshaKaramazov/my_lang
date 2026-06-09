@@ -60,12 +60,20 @@ impl<'a> Compiler<'a> {
     pub fn parse_for(&mut self) -> Result<(), String> {
         self.advance_token(); 
         
-        let loop_var = match self.current_token {
-            Token::Ident(name) => Some(name),
-            _ => None,
-        };
-        self.advance_token();
-        self.expect(Token::In)?; 
+        let has_parens = self.next_if(Token::LParen);
+        
+        let mut loop_vars = Vec::new();
+        while let Token::Ident(name) = self.current_token {
+            loop_vars.push(name);
+            self.advance_token();
+            if !self.next_if(Token::Comma) { break; }
+        }
+        
+        if has_parens {
+            self.expect(Token::RParen)?;
+        }
+        
+        self.expect(Token::In)?;
         
         self.parse_expression()?;     
         self.code.push(Op::MakeIter); 
@@ -75,21 +83,37 @@ impl<'a> Compiler<'a> {
         
         self.loop_contexts.push((loop_start, Vec::new()));
         
-        let old_val = if let Some(loop_var) = loop_var {
+        let mut old_vals = Vec::new();
+
+        if loop_vars.len() > 1 {
+            self.code.push(Op::UnpackTuple(loop_vars.len()));
+            for name in loop_vars.iter().rev() {
+                let var_id = self.next_slot;
+                self.next_slot += 1;
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth, None));
+                old_vals.push((*name, old_val));
+
+                if self.scope_depth == 0 {
+                    self.code.push(Op::StoreGlobal(var_id));
+                } else {
+                    self.code.push(Op::StoreLocal(var_id));
+                }
+            }
+        } else if loop_vars.len() == 1 {
+            let name = loop_vars[0];
             let var_id = self.next_slot;
             self.next_slot += 1;
-            let old_val = self.variables.insert(loop_var, (var_id, self.scope_depth, None));
+            let old_val = self.variables.insert(name, (var_id, self.scope_depth, None));
+            old_vals.push((name, old_val));
 
             if self.scope_depth == 0 {
                 self.code.push(Op::StoreGlobal(var_id));
             } else {
                 self.code.push(Op::StoreLocal(var_id));
             }
-            Some(old_val)
         } else {
             self.code.push(Op::Pop);
-            None
-        };
+        }
 
         self.parse_block()?;
         
@@ -103,16 +127,17 @@ impl<'a> Compiler<'a> {
         }
         
         self.code.push(Op::Pop); 
-        if let Some(old_val) = old_val {
+
+        for (name, old_val) in old_vals {
             if let Some(prev) = old_val {
-                self.variables.insert(loop_var.unwrap(), prev);
+                self.variables.insert(name, prev);
             } else {
-                self.variables.remove(loop_var.unwrap());
+                self.variables.remove(name);
             }
             self.next_slot -= 1;
         }
         Ok(())
-    }
+    }    
 
     fn expect(&mut self, token: Token) -> Result<(), String> {
         if !self.next_if(token) {
@@ -511,7 +536,22 @@ impl<'a> Compiler<'a> {
                     self.code.push(Op::PushVoid);
                 } else {
                     self.parse_expression()?;
+                    
+                    let mut count = 1;
+                    let mut is_tuple = false;
+
+                    while self.next_if(Token::Comma) {
+                        is_tuple = true;
+                        if self.current_token == Token::RParen { break; } 
+                        self.parse_expression()?;
+                        count += 1;
+                    }
+
                     self.expect(Token::RParen)?;
+                    
+                    if is_tuple {
+                        self.code.push(Op::MakeTuple(count));
+                    }
                 }
             }
             _ => return Err(format!("Expected expression, got: {:?}", self.current_token)),
@@ -582,35 +622,80 @@ impl<'a> Compiler<'a> {
         Ok(res)
     }
 
-    fn parse_let(&mut self, name: &'a str) -> Result<(), String> {
-        let tp = if self.next_if(Token::Colon) {
-            Some(self.parse_type()?)
+    fn parse_let(&mut self, first_name: &'a str) -> Result<(), String> {
+        let mut names = vec![first_name];
+        let mut types = vec![];
+
+        if self.next_if(Token::Colon) {
+            types.push(Some(self.parse_type()?));
         } else {
-            None
-        };
+            types.push(None);
+        }
+
+        let mut is_tuple = false;
+        while self.next_if(Token::Comma) {
+            is_tuple = true;
+            let next_name = match self.current_token {
+                Token::Ident(n) => n,
+                _ => return Err("Expected identifier in tuple destructuring".to_string()),
+            };
+            self.advance_token();
+            names.push(next_name);
+
+            if self.next_if(Token::Colon) {
+                types.push(Some(self.parse_type()?));
+            } else {
+                types.push(None);
+            }
+        }
+
         self.expect(Token::Assign)?;
 
-        if matches!(self.current_token, Token::ArifmOr | Token::Or) {
-            self.parse_fn(Some(name), tp)?;
+        if names.len() == 1 && matches!(self.current_token, Token::ArifmOr | Token::Or) {
+            self.parse_fn(Some(names[0]), types[0].clone())?;
             self.code.push(Op::PushVoid); 
             return Ok(());
         } 
-        self.parse_expression()?;
+
+        self.parse_expression()?; 
         self.next_if(Token::Semicolon);
 
-        let var_id = self.next_slot;
-        self.next_slot += 1;
+        if is_tuple {
+            self.code.push(Op::UnpackTuple(names.len()));
+            
+            for (i, name) in names.into_iter().enumerate().rev() {
+                let tp = &types[i];
+                if let Some(t) = tp {
+                    self.code.push(Op::ExpectType(t.clone()));
+                }
 
-        let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(one, two, _)| (one, two));
-        self.scope_changes.push((name, old_value));
+                let var_id = self.next_slot;
+                self.next_slot += 1;
+                let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(a, b, _)| (a, b));
+                self.scope_changes.push((name, old_value));
 
-        if let Some(tp) = tp {
-            self.code.push(Op::ExpectType(tp));
-        }
-        if self.scope_depth == 0 {
-            self.code.push(Op::StoreGlobal(var_id));
+                if self.scope_depth == 0 {
+                    self.code.push(Op::StoreGlobal(var_id));
+                } else {
+                    self.code.push(Op::StoreLocal(var_id));
+                }
+            }
         } else {
-            self.code.push(Op::StoreLocal(var_id));
+            let name = names[0];
+            let tp = &types[0];
+            if let Some(t) = tp {
+                self.code.push(Op::ExpectType(t.clone()));
+            }
+            let var_id = self.next_slot;
+            self.next_slot += 1;
+            let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(a, b, _)| (a, b));
+            self.scope_changes.push((name, old_value));
+
+            if self.scope_depth == 0 {
+                self.code.push(Op::StoreGlobal(var_id));
+            } else {
+                self.code.push(Op::StoreLocal(var_id));
+            }
         }
 
         self.code.push(Op::PushVoid);
@@ -1036,13 +1121,16 @@ impl<'a> Compiler<'a> {
         if self.next_if(Token::LParen) {
             self.parse_func_call(name, false)?;
             return Ok(());
-        } else if self.current_token == Token::Colon {
+        }
+
+        let is_known = self.variables.contains_key(name);
+        if self.current_token == Token::Colon || !is_known && (self.current_token == Token::Comma || self.current_token == Token::Assign) {
             return self.parse_let(name);
         }
 
         let (var_id, var_depth, var_type) = match self.variables.get(name){
             Some((vid, vd, var_type)) => (*vid, *vd, var_type.clone()),
-            None => return self.parse_let(name),
+            None => return Err(format!("can't find {} var", name)),
         };
         let is_global = var_depth == 0;
 

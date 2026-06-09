@@ -114,6 +114,12 @@ impl<'a> VM {
                 let format: String = Self::format(&args)?;
                 self.stack.push(Value::Str(format));
             }
+            "enumerate" => {
+                self.need_args(funcname, 1, args.len())?;
+                
+                let target = self.deref(&mut args[0]).clone().make_iter()?;
+                self.stack.push(Value::Iter(crate::value::Iterator::Enumerate(Box::new(target), 0)));
+            }
             "read" => {
                 self.need_args(funcname, 1, args.len())?;
                 let val = self.deref(&mut args[0]);
