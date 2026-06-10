@@ -2,6 +2,7 @@ use crate::{consts, errors::CompilerError, lexer::{Lexer, Token}, op::Op, types:
 use rustc_hash::FxHashMap;
 
 pub struct Compiler<'a> {
+    source: &'a str,
     code: Vec<Op<'a>>,
     current_token: Token<'a>,
     lexer: Lexer<'a>,
@@ -16,6 +17,7 @@ impl<'a> Compiler<'a> {
     pub fn new(source: &'a str) -> Self {
         let lexer = Lexer::new(source);
         Self {
+            source,
             code: Vec::with_capacity(512),
             current_token: Token::Begin, 
             lexer, 
@@ -45,6 +47,27 @@ impl<'a> Compiler<'a> {
         self.code.push(op);
         code
     }
+
+    pub fn throw_error<T>(&self, err: CompilerError, msg: &str) -> Result<T, CompilerError> {
+        let (line_num, col_pos) = self.lexer.get_pos();
+
+        let line_index = line_num;
+        let line_text = self.source.lines().nth(line_index).unwrap_or("");
+
+        let display_line_num = line_num + 1;
+        let prefix = format!(" {} | ", display_line_num);
+
+        let line_char_count = line_text.chars().count();
+        let rel_char_pos = col_pos.min(line_char_count);
+
+        let padding = " ".repeat(prefix.chars().count() + rel_char_pos);
+
+        eprintln!("\n[Compile error]: {}", msg);
+        eprintln!("{}{}", prefix, line_text);
+        eprintln!("{}^^--\n", padding);
+
+        Err(err)
+    }    
 
     pub fn patch_plug(&mut self, index: usize) {
         let target = self.code.len();
@@ -140,8 +163,11 @@ impl<'a> Compiler<'a> {
     }    
 
     fn expect(&mut self, token: Token) -> Result<(), CompilerError> {
-        if !self.next_if(token) {
-            return Err(CompilerError::UnexpectedArg); 
+        if !self.next_if(token.clone()) {
+            return self.throw_error(
+                CompilerError::ExpectedToken, 
+                &format!("Expected {:?}, got {:?}", token, self.current_token)
+            );
         } 
         Ok(())
     }

@@ -413,12 +413,10 @@ impl<'a> VM {
     }
 
     pub fn run(&mut self, code: &[Op<'a>]) -> Result<(), VMError> {
-        let ins = std::time::Instant::now();
         let mut ip = 0;
         while ip < code.len() {
             self.step(&code, &mut ip)?;
         }
-        println!("Чистое время ВМ: {:?}", ins.elapsed());
         Ok(())
     }
 }

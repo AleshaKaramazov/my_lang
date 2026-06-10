@@ -34,11 +34,33 @@ pub struct Range {
 }
 
 #[derive(Debug, Clone)]
+pub struct LinesIter {
+    pub source: String,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SplitIter {
+    pub source: String,
+    pub delimiter: String,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SplitWhitespaceIter {
+    pub source: String,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
 pub enum Iterator {
     String(IntoIter<char>),
     Set(IntoIter<Value>),
     Range(Range),
     Enumerate(Box<Iterator>, i64),
+    Lines(LinesIter),
+    Split(SplitIter),
+    SplitWhitespace(SplitWhitespaceIter),
 }
 
 impl Iterator {
@@ -65,6 +87,77 @@ impl Iterator {
                     Some(Value::Tuple(vec![Value::Number(current_idx), val]))
                 } else {
                     None
+                }
+            }
+            Self::Split(iter) => {
+                if iter.offset > iter.source.len() {
+                    return None;
+                }
+                let tail = &iter.source[iter.offset..];
+                
+                if iter.delimiter.is_empty() {
+                    let mut chars = tail.chars();
+                    if let Some(c) = chars.next() {
+                        iter.offset += c.len_utf8();
+                        return Some(Value::Str(c.to_string()));
+                    } else {
+                        iter.offset = iter.source.len() + 1;
+                        return None;
+                    }
+                }
+
+                if let Some(pos) = tail.find(&iter.delimiter) {
+                    let part = &tail[..pos];
+                    iter.offset += pos + iter.delimiter.len();
+                    Some(Value::Str(part.to_string()))
+                } else {
+                    iter.offset = iter.source.len() + 1; 
+                    Some(Value::Str(tail.to_string()))
+                }
+            }
+
+            Self::SplitWhitespace(iter) => {
+                if iter.offset >= iter.source.len() {
+                    return None;
+                }
+                let tail = &iter.source[iter.offset..];
+                
+                if let Some(start_pos) = tail.find(|c: char| !c.is_whitespace()) {
+                    let word_tail = &tail[start_pos..];
+                    
+                    if let Some(end_pos) = word_tail.find(|c: char| c.is_whitespace()) {
+                        let word = &word_tail[..end_pos];
+                        iter.offset += start_pos + end_pos;
+                        Some(Value::Str(word.to_string()))
+                    } else {
+                        iter.offset = iter.source.len();
+                        Some(Value::Str(word_tail.to_string()))
+                    }
+                } else {
+                    iter.offset = iter.source.len();
+                    None
+                }
+            }
+            Self::Lines(iter) => {
+                if iter.offset >= iter.source.len() {
+                    return None;
+                }
+
+                let tail = &iter.source[iter.offset..];
+                
+                if let Some(newline_pos) = tail.find('\n') {
+                    let mut line = &tail[..newline_pos];
+                    
+                    if line.ends_with('\r') {
+                        line = &line[..line.len() - 1];
+                    }
+                    
+                    iter.offset += newline_pos + 1;
+                    Some(Value::Str(line.to_string()))
+                } else {
+                    let line = tail;
+                    iter.offset = iter.source.len();
+                    Some(Value::Str(line.to_string()))
                 }
             }
         } 
@@ -203,6 +296,7 @@ impl<'a> Value {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
                 Iterator::String(iter)
             }
+            Self::Iter(i) => i,
             Self::Set(i) => Iterator::Set(i.into_iter()),
             Self::Range(range) => Iterator::Range(range),
             _ => return Err(VMError::UnExpectedType),

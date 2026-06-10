@@ -230,27 +230,81 @@ impl<'a> VM {
             "lines" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
-                let res = Value::Set(arg.lines().map(|x| Value::Str(x.to_string())).collect());
+                
+                let res = Value::Iter(crate::value::Iterator::Lines(crate::value::LinesIter {
+                    source: arg.to_string(),
+                    offset: 0,
+                }));
+                
                 self.push(res);
             }
             "split_whitespace" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
-                let res = Value::Set(arg.split_whitespace().map(|x| Value::Str(x.to_string())).collect());
+                
+                let res = Value::Iter(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
+                    source: arg.to_string(),
+                    offset: 0,
+                }));
                 self.push(res);
             }
             "split" => {
                 self.need_args(2, args.len())?;
-                let spliter = args[1].eval_str()?;
-                let res = match &args[0] {
-                    Value::Ref(i) => match &self.frame[*i] {
-                        Value::Str(arg) => Value::Set(arg.split(spliter).map(|x| Value::Str(x.to_string())).collect()),
-                        _ => return Err(VMError::BadArgument),
-                    }
-                    Value::Str(arg) => Value::Set(arg.split(spliter).map(|x| Value::Str(x.to_string())).collect()),
+                let delimiter = args[1].eval_str()?.to_string();
+                
+                let source = match &args[0] {
+                    Value::Ref(i) => self.frame[*i].eval_str()?,
+                    Value::Str(arg) => arg.as_str(),
                     _ => return Err(VMError::BadArgument),
+                }.to_string();
+                
+                let res = Value::Iter(crate::value::Iterator::Split(crate::value::SplitIter {
+                    source,
+                    delimiter,
+                    offset: 0,
+                }));
+                self.push(res);
+            }
+            "nth" => {
+                self.need_args(2, args.len())?;
+                let n = args[1].expect_number()?;
+                if n < 0 {
+                    return Err(VMError::BadArgument);
+                }
+
+                let mut result = None;
+                {
+                    let iter_ref = self.deref(&mut args[0]);
+                    
+                    for _ in 0..=n {
+                        match iter_ref.next()? {
+                            Some(val) => result = Some(val),
+                            None => {
+                                result = None;  
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                let res = match result {
+                    Some(val) => Value::Cat(Some(Box::new(val))),
+                    None => Value::Cat(None),
                 };
                 self.push(res);
+            }
+            "collect" => {
+                self.need_args(1, args.len())?;
+                let mut result_set = Vec::new();
+                
+                {
+                    let iter_ref = self.deref(&mut args[0]);
+                    while let Some(val) = iter_ref.next()? {
+                        result_set.push(val);
+                    }
+                }
+                
+                self.push(Value::Set(result_set));
             }
             "contains" => {
                 self.need_args(2, args.len())?;

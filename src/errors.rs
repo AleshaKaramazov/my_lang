@@ -3,6 +3,8 @@
 pub enum CompilerError {
     UnexpectedArg,
     UnfindedVar,
+    SyntaxError,    
+    ExpectedToken
 }
 
 #[derive(Debug)]
