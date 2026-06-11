@@ -1192,7 +1192,7 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::LoadLocal(id, depth_delta));
             }
         } else {
-            self.code.push(Op::PushStr(name));
+            self.code.push(Op::PushNumber(Self::func_code(name)?));
         }
         
         self.code.push(Op::CallFunc(arg_count));
@@ -1460,5 +1460,43 @@ impl<'a> Compiler<'a> {
     pub fn compile(mut self) -> Result<Vec<Op<'a>>, CompilerError> {
         self.parse_block()?;
         Ok(self.code)
+    }
+
+    pub fn func_code(func_name: &'a str) -> Result<i64, CompilerError> {
+        let code: i64 = match func_name {
+            "len" => 1,
+            "starts_with" => 2,
+            "readch" => 3,
+            "format" => 4,
+            "enumerate" => 5,
+            "read" => 6,
+            "create" | "truncate" => 7,
+            "open" => 8,
+            "is_ok" => 9,
+            "is_empty" => 10,
+            "is_some" => 11,
+            "push" => 12,
+            "readln" => 13,
+            "parse" => 14,
+            "step" => 15,
+            "lines" => 16,
+            "split_whitespace" => 17,
+            "split" => 18,
+            "nth" => 19,
+            "collect" => 20, 
+            "contains" => 21,
+            "to_lower" => 22,
+            "to_upper" => 23,
+            "write" => 24,
+            "writeln" => 25,
+            "print" => 26,
+            "println" => 27,
+            "filter_map" => 28,
+            "map" => 29,
+            "clear_console" => 30,
+            "filter" => 31,
+            _ => return Err(CompilerError::UnknownFunc)   
+        };
+        Ok(code)
     }
 }

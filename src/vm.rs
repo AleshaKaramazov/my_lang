@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use crate::op::Op;
 use crate::consts;
@@ -88,7 +89,7 @@ impl<'a> VM {
 
             match op {
                 Op::PushFLoat(f) => self.push(Value::Float(*f)),
-                Op::PushStr(s) => self.push(Value::Str(Rc::new(s.to_string()))),
+                Op::PushStr(s) => self.push(Value::Str(Rc::new(RefCell::new(s.to_string())))),
                 Op::PushChar(c) => self.push(Value::Char(*c)),
                 Op::PushNumber(n) => self.push(Value::Number(*n)),
                 Op::PushBool(b) => self.push(Value::Bool(*b)),
@@ -197,7 +198,7 @@ impl<'a> VM {
                 Op::MakeTuple(count) => {
                     let count = *count;
                     if count == 0 {
-                        self.push(Value::Tuple(Rc::new(Vec::new())));
+                        self.push(Value::Tuple(Rc::new(RefCell::new(Vec::new()))));
                     } else {
                         let start = self.sp - count;
                         let mut vals = Vec::with_capacity(count);
@@ -207,13 +208,14 @@ impl<'a> VM {
                         }
                         vals.push(std::mem::replace(&mut self.tos, Value::Void));
                         
-                        self.tos = Value::Tuple(Rc::new(vals));
+                        self.tos = Value::Tuple(Rc::new(RefCell::new(vals)));
                         self.sp = start + 1;
                     }
                 }
                 Op::UnpackTuple(count) => {
                     let val = self.pop();
                     if let Value::Tuple(vals) = val {
+                        let vals = vals.borrow();
                         if vals.len() != *count {
                             return Err(VMError::EmptyStack);
                         }
@@ -340,7 +342,7 @@ impl<'a> VM {
                 Op::MakeSet(count) => {
                     let count = *count;
                     if count == 0 {
-                        self.push(Value::Set(Rc::new(Vec::new())));
+                        self.push(Value::Set(Rc::new(RefCell::new(Vec::new()))));
                     } else {
                         let start = self.sp - count;
                         let mut vals = Vec::with_capacity(count);
@@ -350,7 +352,7 @@ impl<'a> VM {
                         }
                         vals.push(std::mem::replace(&mut self.tos, Value::Void));
                         
-                        self.tos = Value::Set(Rc::new(vals));
+                        self.tos = Value::Set(Rc::new(RefCell::new(vals)));
                         self.sp = start + 1;
                     }
                 }
@@ -458,13 +460,13 @@ impl<'a> VM {
                     let func_val = self.pop();
                     
                     match func_val {
-                        Value::Str(func_name) => {
+                        Value::Number(func) => {
                             let mut args = Vec::with_capacity(*n);
                             for _ in 0..*n {
                                 args.push(self.pop());
                             }
                             args.reverse();
-                            self.run_func(&func_name, args, code)?;
+                            self.run_func(func, args, code)?;
                         }
                         Value::Fn(target_ip, env_frame) => { 
                             let mut args = Vec::with_capacity(*n);

@@ -3,7 +3,8 @@
 pub enum CompilerError {
     UnexpectedArg,
     UnfindedVar,
-    ExpectedToken
+    ExpectedToken,
+    UnknownFunc
 }
 
 #[derive(Debug)]
@@ -21,5 +22,4 @@ pub enum VMError {
     BadArgument,
     TooManyArgs,
     WriteError,
-    UnknownFunc
 }

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::vec::IntoIter;
@@ -11,18 +12,18 @@ use crate::types::Type;
 pub enum Value {
     Void,
     Number(i64),
-    Str(Rc<String>),
+    Str(Rc<RefCell<String>>),
     Char(char),
     Bool(bool),
     Ref(usize),
     Iter(Box<Iterator>),
     Fn(u32, u32),
-    Set(Rc<Vec<Value>>),
+    Set(Rc<RefCell<Vec<Value>>>),
     Result(Box<Result<Value, Value>>),
     Cat(Option<Box<Value>>),
     File(Box<FileHandler>),
     Float(f64),
-    Tuple(Rc<Vec<Value>>),
+    Tuple(Rc<RefCell<Vec<Value>>>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,7 +84,7 @@ impl Iterator {
                     let current_idx = *index;
                     *index += 1; 
                     
-                    Some(Value::Tuple(Rc::new(vec![Value::Number(current_idx), val])))
+                    Some(Value::Tuple(Rc::new(RefCell::new(vec![Value::Number(current_idx), val]))))
                 } else {
                     None
                 }
@@ -98,7 +99,7 @@ impl Iterator {
                     let mut chars = tail.chars();
                     if let Some(c) = chars.next() {
                         iter.offset += c.len_utf8();
-                        return Some(Value::Str(Rc::new(c.to_string())))
+                        return Some(Value::Str(Rc::new(RefCell::new(c.to_string()))))
                     } else {
                         iter.offset = iter.source.len() + 1;
                         return None;
@@ -108,10 +109,10 @@ impl Iterator {
                 if let Some(pos) = tail.find(&iter.delimiter) {
                     let part = &tail[..pos];
                     iter.offset += pos + iter.delimiter.len();
-                    Some(Value::Str(Rc::new(part.to_string())))
+                    Some(Value::Str(Rc::new(RefCell::new(part.to_string()))))
                 } else {
                     iter.offset = iter.source.len() + 1; 
-                    Some(Value::Str(Rc::new(tail.to_string())))
+                    Some(Value::Str(Rc::new(RefCell::new(tail.to_string()))))
                 }
             }
 
@@ -127,10 +128,10 @@ impl Iterator {
                     if let Some(end_pos) = word_tail.find(|c: char| c.is_whitespace()) {
                         let word = &word_tail[..end_pos];
                         iter.offset += start_pos + end_pos;
-                        Some(Value::Str(Rc::new(word.to_string())))
+                        Some(Value::Str(Rc::new(RefCell::new(word.to_string()))))
                     } else {
                         iter.offset = iter.source.len();
-                        Some(Value::Str(Rc::new(word_tail.to_string())))
+                        Some(Value::Str(Rc::new(RefCell::new(word_tail.to_string()))))
                     }
                 } else {
                     iter.offset = iter.source.len();
@@ -152,11 +153,11 @@ impl Iterator {
                     }
                     
                     iter.offset += newline_pos + 1;
-                    Some(Value::Str(Rc::new(line.to_string())))
+                    Some(Value::Str(Rc::new(RefCell::new(line.to_string()))))
                 } else {
                     let line = tail;
                     iter.offset = iter.source.len();
-                    Some(Value::Str(Rc::new(line.to_string())))
+                    Some(Value::Str(Rc::new(RefCell::new(line.to_string()))))
                 }
             }
         } 
@@ -169,7 +170,7 @@ impl std::io::Write for Value {
             f.file.borrow_mut().write(buf) 
         } else if let Value::Str(filepath) = self {
             if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true).append(true).open(&**filepath) {
+                .create(true).append(true).open(&*filepath.borrow()) {
                 f.write(buf)
             }  
             else {
@@ -204,14 +205,14 @@ impl Value {
             Value::Bool(b) => *b,
             Value::Number(n) => *n != 0,
             Value::Char(_) => true,
-            Value::Str(s) => !s.is_empty(),
+            Value::Str(s) => !s.borrow().is_empty(),
             _ => false,
         }
     }
 
-    pub fn eval_str(&self) -> Result<&str, VMError> {
+    pub fn eval_str(&self) -> Result<String, VMError> {
         match self {
-            Self::Str(s) => Ok(s),
+            Self::Str(s) => Ok(s.borrow().to_string()),
             _ => Err(VMError::UnExpectedType)
         }
     }
@@ -219,7 +220,7 @@ impl Value {
     pub fn open_file(filename: &str) -> Self {
         Value::Result(Box::new(
             FileHandler::new_file(filename)
-                .map(|x| Value::File(Box::new(x))).map_err(|_| Value::Str(Rc::new(format!("error with open file: {}", filename))))
+                .map(|x| Value::File(Box::new(x))).map_err(|_| Value::Str(Rc::new(RefCell::new(format!("error with open file: {}", filename)))))
         ))
     }
 
@@ -237,9 +238,9 @@ impl Value {
                 Ok(())
             }
             (Value::Str(a), b) => {
-                let a = Rc::make_mut(a);
+                let mut a = a.borrow_mut();
                 match b {
-                    Value::Str(s2) => a.push_str(&s2),
+                    Value::Str(s2) => a.push_str(&s2.borrow()),
                     Value::Char(c) => a.push(c),
                     _ => a.push_str(&b.to_string()),
                 }
@@ -248,22 +249,23 @@ impl Value {
             (s @ Value::Char(_), b) => {
                 let mut new_str = s.to_string();
                 match b {
-                    Value::Str(s2) => new_str.push_str(&s2),
+                    Value::Str(s2) => new_str.push_str(&s2.borrow()),
                     Value::Char(c) => new_str.push(c),
                     _ => new_str.push_str(&b.to_string()),
                 }
-                *s = Value::Str(Rc::new(new_str)); Ok(())
+                *s = Value::Str(Rc::new(RefCell::new(new_str))); 
+                Ok(())
             }
             (s, Value::Str(b)) => {
                 let mut new_str = s.to_string();
-                new_str.push_str(&b);
-                *s = Value::Str(Rc::new(new_str));
+                new_str.push_str(&b.borrow());
+                *s = Value::Str(Rc::new(RefCell::new(new_str)));
                 Ok(())
             }
             (s, Value::Char(b)) => {
                 let mut new_str = s.to_string();
                 new_str.push(b);
-                *s = Value::Str(Rc::new(new_str));
+                *s = Value::Str(Rc::new(RefCell::new(new_str)));
                 Ok(())
             }
             _ => Err(VMError::BadOperand),
@@ -359,7 +361,7 @@ impl Value {
             (Value::Bool(_), Type::Bool) => true,
             (Value::Void, Type::Result(inner)) => matches!(inner.0, Type::Void),
             (Value::Set(arr), Type::Set(inner_type)) => {
-                arr.iter().all(|val| val.this_type(inner_type))
+                arr.borrow().iter().all(|val| val.this_type(inner_type))
             }
             (Value::Result(res), Type::Result(inner)) => {
                 match &**res {
@@ -407,18 +409,18 @@ impl Value {
     pub fn new_control(res: Result<Value, String>) -> Value {
         Value::Result(Box::new(match res {
             Ok(res) => Ok(res),
-            Err(er) => Err(Value::Str(Rc::new(er)))
+            Err(er) => Err(Value::Str(Rc::new(RefCell::new(er))))
         }))
     }
 
     pub fn make_iter(self) -> Result<Iterator, VMError> {
         let val = match self {
             Self::Str(s) => {
-                let iter = s.chars().collect::<Vec<char>>().into_iter();
+                let iter = s.borrow().chars().collect::<Vec<char>>().into_iter();
                 Iterator::String(iter)
             }
             Self::Iter(i) => *i,
-            Self::Set(i) => Iterator::Set((*i).clone().into_iter()),
+            Self::Set(i) => Iterator::Set(i.borrow().clone().into_iter()),
             _ => return Err(VMError::UnExpectedType),
         };
 
@@ -429,8 +431,7 @@ impl Value {
         let index = index.expect_number()? as usize;
         match self {
             Value::Set(v) => {
-                let v = Rc::make_mut(v);
-                v[index] = to_set;
+                v.borrow_mut()[index] = to_set;
             }
             _ => return Err(VMError::CantIndex)
         }
@@ -440,43 +441,48 @@ impl Value {
     pub fn load_dyap(&self, start: usize, end: usize) -> Result<Value, VMError> {
         let res = match self {
             Value::Set(s) => {
+                let s = s.borrow();
                 let end = if end > s.len() {s.len()} else {end};
-                Value::Set(Rc::new(s[start..end].to_vec()))
+                Value::Set(Rc::new(RefCell::new(s[start..end].to_vec())))
             }
             Value::Str(s) => {
+                let s = s.borrow();
                 let count = s.chars().count();
                 let end = if end > count {count} else {end};
-                Value::Str(Rc::new(s[start..end].to_string()))
+                Value::Str(Rc::new(RefCell::new(s[start..end].to_string())))
             }
             _ => return Err(VMError::UnExpectedType),
         };
         Ok(res)
     }
 
+    pub fn new_str<S: Into<String>>(str: S) -> Self {
+        Value::Str(Rc::new(RefCell::new(str.into())))
+    }
+
+    
     pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), VMError> {
-        let mut current = self;
-
-        for idx in index.iter().take(index.len() - 1).map(|x| x.expect_number()) {
-            match current {
-                Value::Set(v) => {
-                    let v = Rc::make_mut(v);
-                    current = &mut v[idx? as usize];
-                }
-                _ => return Err(VMError::CantIndex),
-            }
-        }
-
-        let last_idx = index.last().unwrap().expect_number()? as usize;
-        match current {
-            Value::Set(v) => {
-                let v = Rc::make_mut(v);
-                v[last_idx] = to_set;
-            }
+        let mut current_rc = match self {
+            Value::Set(v) => v.clone(),
             _ => return Err(VMError::CantIndex),
+        };
+
+        for item in index.iter().take(index.len() - 1) {
+            let idx = item.expect_number()? as usize;
+
+            let next_rc = match &current_rc.borrow()[idx] {
+                Value::Set(next_v) => next_v.clone(),
+                _ => return Err(VMError::CantIndex),
+            };
+            
+            current_rc = next_rc;
         }
+        let last_idx = index.last().ok_or(VMError::CantIndex)?.expect_number()? as usize;
+        current_rc.borrow_mut()[last_idx] = to_set;
 
         Ok(())
     }
+
 
     pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, VMError> {
         let mut current = self.clone();
@@ -502,9 +508,12 @@ impl Value {
             } 
             Value::Number(i) => {
                 match self {
-                    Value::Set(v) =>
-                        v[i.rem_euclid(v.len() as i64) as usize].clone(),
+                    Value::Set(v) => {
+                        let v = v.borrow();
+                        v[i.rem_euclid(v.len() as i64) as usize].clone()
+                    }
                     Value::Str(s) => {
+                        let s = s.borrow();
                         let index = i.rem_euclid(s.chars().count() as i64) as usize;
                         s.chars().nth(index).map(Value::Char).unwrap()
                     }
@@ -524,6 +533,7 @@ impl std::fmt::Display for Value {
             Self::File(file) => write!(f, "{}", file),
             Self::Tuple(t) => {
                 write!(f, "(")?;
+                let t = t.borrow();
                 for (i, val) in t.iter().enumerate() {
                     write!(f, "{}", val)?;
                     if i < t.len() - 1 { write!(f, ", ")?; }
@@ -535,7 +545,7 @@ impl std::fmt::Display for Value {
             Self::Number(n) => write!(f, "{}", n),
             Self::Bool(b) => write!(f, "{}", b),
             Self::Char(c) => write!(f, "{}", c),
-            Self::Str(s) => write!(f, "{}", s),
+            Self::Str(s) => write!(f, "{}", s.borrow()),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
             Self::Fn(_, _) => write!(f, "FN"),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),
@@ -552,7 +562,7 @@ impl std::fmt::Display for Value {
             }
             Self::Set(s) => {
                 write!(f, "[ ")?;
-                for i in s.iter() {
+                for i in s.borrow().iter() {
                     write!(f, "{}, ", i)?;
                 }
                 write!(f, "]")
