@@ -616,26 +616,31 @@ impl<'a> Compiler<'a> {
             }
             _ => return Err(CompilerError::UnexpectedArg),
         }
-        if self.next_if(Token::LBracket) {
-            self.parse_expression()?;
-            self.expect(Token::RBracket)?;
-            let mut arg_count = 1;
-            while self.next_if(Token::LBracket) {
-                arg_count+=1; 
+        loop {
+            if self.next_if(Token::LBracket) {
                 self.parse_expression()?;
                 self.expect(Token::RBracket)?;
-            }
-            self.code.push(Op::LoadIndex(arg_count));
-        }
-        while self.next_if(Token::Dot) {
-            let method_name = if let Token::Ident(n) = self.current_token {
-                self.advance_token();
-                n 
+                let mut arg_count = 1;
+                while self.next_if(Token::LBracket) {
+                    arg_count += 1;
+                    self.parse_expression()?;
+                    self.expect(Token::RBracket)?;
+                }
+                self.code.push(Op::LoadIndex(arg_count));
+            } else if self.next_if(Token::Dot) {
+                let method_name = if let Token::Ident(n) = self.current_token {
+                    self.advance_token();
+                    n 
+                } else {
+                    return Err(CompilerError::UnexpectedArg);
+                };
+                self.expect(Token::LParen)?;
+                self.parse_func_call(method_name, true)?;
+            } else if self.next_if(Token::Query) {
+                self.code.push(Op::Try);
             } else {
-                return Err(CompilerError::UnexpectedArg);
-            };
-            self.expect(Token::LParen)?;
-            self.parse_func_call(method_name, true)?;
+                break;
+            }
         }
         Ok(())
     }

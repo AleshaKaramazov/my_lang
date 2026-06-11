@@ -84,7 +84,7 @@ impl<'a> VM {
             Op::PushNumber(n) => self.push(Value::Number(*n)),
             Op::PushBool(b) => self.push(Value::Bool(*b)),
             Op::PushRefGlobal(idx) => self.push(Value::Ref(*idx)),
-            Op::PushFn(id) => self.push(Value::Fn(*id, self.now_frame)),
+            Op::PushFn(id) => self.push(Value::Fn(*id as u32, self.now_frame as u32)),
             Op::PushVoid => self.push(Value::Void),
             Op::Pop => {
                 self.pop()?;
@@ -101,6 +101,44 @@ impl<'a> VM {
                 if !val.this_type(&tp) {
                     println!("Expected: {:?}, find: {}", tp, val);
                     return Err(VMError::UnExpectedType);
+                }
+            }
+            Op::Try => {
+                let val = self.pop()?;
+                match val {
+                    Value::Result(inner) => match *inner {
+                        Ok(inner_val) => {
+                            self.push(inner_val);
+                        }
+                        Err(err_val) => {
+                            let return_val = Value::Result(Box::new(Err(err_val)));
+                            let frame = self.call_stack.pop().ok_or_else(|| VMError::EmptyStack)?;
+                            
+                            self.frame.truncate(self.now_frame);
+                            self.now_frame = frame.old_frame;
+                            *ip = frame.return_ip;
+                            
+                            self.push(return_val);
+                            return Ok(());
+                        }
+                    },
+                    Value::Cat(inner) => match inner {
+                        Some(inner_val) => {
+                            self.push(*inner_val);
+                        }
+                        None => {
+                            let return_val = Value::Cat(None);
+                            let frame = self.call_stack.pop().ok_or_else(|| VMError::EmptyStack)?;
+                            
+                            self.frame.truncate(self.now_frame);
+                            self.now_frame = frame.old_frame;
+                            *ip = frame.return_ip;
+                            
+                            self.push(return_val);
+                            return Ok(());
+                        }
+                    },
+                    _ => return Err(VMError::UnExpectedType),
                 }
             }
             Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
@@ -145,7 +183,7 @@ impl<'a> VM {
                 }
                 
                 self.sp = start;
-                self.push(Value::Tuple(vals));
+                self.push(Value::Tuple(Rc::new(vals)));
             }
             Op::UnpackTuple(count) => {
                 let val = self.pop()?;
@@ -153,8 +191,8 @@ impl<'a> VM {
                     if vals.len() != *count {
                         return Err(VMError::EmptyStack);
                     }
-                    for v in vals {
-                        self.push(v);
+                    for v in vals.iter() {
+                        self.push(v.clone());
                     }
                 } else {
                     return Err(VMError::EmptyStack);
@@ -223,7 +261,7 @@ impl<'a> VM {
             Op::MakeIter => {
                 let val = self.pop()?;
                 self.push(
-                    if matches!(val, Value::Iter(_)) {val} else {Value::Iter(val.make_iter()?)}
+                    if matches!(val, Value::Iter(_)) {val} else {Value::Iter(Box::new(val.make_iter()?))}
                 );
             }
             Op::IterNext(i) => {
@@ -386,13 +424,13 @@ impl<'a> VM {
                         self.call_stack.push(CallFrame {
                             return_ip: *ip + 1, 
                             old_frame: self.now_frame,
-                            static_link: env_frame, 
+                            static_link: env_frame as usize, 
                             frame_idx: next_frame_idx,
                         });
 
                         self.now_frame = next_frame_idx;
                         self.frame.extend(args);
-                        *ip = target_ip;
+                        *ip = target_ip as usize;
                         return Ok(()); 
                     }
                     _ => return Err(VMError::FuncErr),

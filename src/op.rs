@@ -16,6 +16,7 @@ pub enum Op<'a> {
     DupTarget(usize),
     PushFn(usize),
     MakeRange(bool),
+    Try,
     LoadGlobal(usize),
     StoreGlobal(usize),
     CallFunc(usize),

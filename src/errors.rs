@@ -3,7 +3,6 @@
 pub enum CompilerError {
     UnexpectedArg,
     UnfindedVar,
-    SyntaxError,    
     ExpectedToken
 }
 

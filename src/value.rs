@@ -15,18 +15,17 @@ pub enum Value {
     Char(char),
     Bool(bool),
     Ref(usize),
-    Range(Range),
-    Iter(Iterator),
-    Fn(usize, usize),
+    Iter(Box<Iterator>),
+    Fn(u32, u32),
     Set(Rc<Vec<Value>>),
     Result(Box<Result<Value, Value>>),
     Cat(Option<Box<Value>>),
-    File(FileHandler),
+    File(Box<FileHandler>),
     Float(f64),
-    Tuple(Vec<Value>),
+    Tuple(Rc<Vec<Value>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Range {
     pub start: i64,
     pub end: i64,
@@ -84,7 +83,7 @@ impl Iterator {
                     let current_idx = *index;
                     *index += 1; 
                     
-                    Some(Value::Tuple(vec![Value::Number(current_idx), val]))
+                    Some(Value::Tuple(Rc::new(vec![Value::Number(current_idx), val])))
                 } else {
                     None
                 }
@@ -220,12 +219,12 @@ impl<'a> Value {
     pub fn open_file(filename: &str) -> Self {
         Value::Result(Box::new(
             FileHandler::new_file(filename)
-                .map(|x| Value::File(x)).map_err(|_| Value::Str(Rc::new(format!("error with open file: {}", filename))))
+                .map(|x| Value::File(Box::new(x))).map_err(|_| Value::Str(Rc::new(format!("error with open file: {}", filename))))
         ))
     }
 
     pub fn new_file(filename: &str, opt: i64) -> Result<Self, VMError> {
-        Ok(Value::File(FileHandler::open(filename, opt)?))
+        Ok(Value::File(Box::new(FileHandler::open(filename, opt)?)))
     }
     pub fn add_assign(&mut self, rhs: Self) -> Result<(), VMError> {
         match (self, rhs) {
@@ -402,7 +401,7 @@ impl<'a> Value {
                 end += 1; 
             }
         }
-        Ok(Value::Range(Range { start, end, step: if start > end {-1} else {1} }))
+        Ok(Value::Iter(Box::new(Iterator::Range(Range { start, end, step: if start > end {-1} else {1} }))))
     }
 
     pub fn new_control(res: Result<Value, String>) -> Value {
@@ -418,9 +417,8 @@ impl<'a> Value {
                 let iter = s.chars().collect::<Vec<char>>().into_iter();
                 Iterator::String(iter)
             }
-            Self::Iter(i) => i,
+            Self::Iter(i) => *i,
             Self::Set(i) => Iterator::Set((*i).clone().into_iter()),
-            Self::Range(range) => Iterator::Range(range),
             _ => return Err(VMError::UnExpectedType),
         };
 
@@ -493,11 +491,15 @@ impl<'a> Value {
     
     pub fn load_index(&self, index: &Self) -> Result<Value, VMError> {
         let val = match index {
-            Value::Range(r) => {
-                if r.start < 0 || r.end < 0 || r.step < 0 || r.start > r.end {
+            Value::Iter(i) => {
+                if let Iterator::Range(r) = &**i {
+                    if r.start < 0 || r.end < 0 || r.step < 0 || r.start > r.end {
+                        return Err(VMError::CantIndex)
+                    } 
+                    self.load_dyap(r.start as usize, r.end as usize)?
+                } else {
                     return Err(VMError::CantIndex)
-                } 
-                self.load_dyap(r.start as usize, r.end as usize)?
+                }
             } 
             Value::Number(i) => {
                 match self {
@@ -535,7 +537,6 @@ impl std::fmt::Display for Value {
             Self::Bool(b) => write!(f, "{}", b),
             Self::Char(c) => write!(f, "{}", c),
             Self::Str(s) => write!(f, "{}", s),
-            Self::Range(s) => write!(f, "{}..{}", s.start, s.end),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
             Self::Fn(i, _) => write!(f, "FN<ID: {}>", i),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),

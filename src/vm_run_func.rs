@@ -1,6 +1,6 @@
 use std::{fs, io::{Read, Write}, rc::Rc};
 use crate::{
-    consts, errors::VMError, op::Op, value::Value, vm::{CallFrame, VM}
+    consts, errors::VMError, op::Op, value::{Iterator, Value}, vm::{CallFrame, VM}
 };
 
 impl<'a> VM {
@@ -121,7 +121,7 @@ impl<'a> VM {
                 self.need_args(1, args.len())?;
                 
                 let target = self.deref(&mut args[0]).clone().make_iter()?;
-                self.push(Value::Iter(crate::value::Iterator::Enumerate(Box::new(target), 0)));
+                self.push(Value::Iter(Box::new(crate::value::Iterator::Enumerate(Box::new(target), 0))));
             }
             "read" => {
                 self.need_args(1, args.len())?;
@@ -222,22 +222,23 @@ impl<'a> VM {
             }
             "step" => {
                 self.need_args(1, args.len())?;
-                let mut arg = if let Value::Range(i) = &args[0] {
-                    i.clone()
+                let mut arg = if let Value::Iter(i) = &args[0]
+                    && let Iterator::Range(r) = **i {
+                        r
                 } else {
                     return Err(VMError::BadArgument)
                 };
                 arg.step = args[1].expect_number()?;
-                self.push(Value::Range(arg));
+                self.push(Value::Iter(Box::new(Iterator::Range(arg))));
             }
             "lines" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
                 
-                let res = Value::Iter(crate::value::Iterator::Lines(crate::value::LinesIter {
+                let res = Value::Iter(Box::new(crate::value::Iterator::Lines(crate::value::LinesIter {
                     source: arg.to_string(),
                     offset: 0,
-                }));
+                })));
                 
                 self.push(res);
             }
@@ -245,10 +246,10 @@ impl<'a> VM {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
                 
-                let res = Value::Iter(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
+                let res = Value::Iter(Box::new(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
                     source: arg.to_string(),
                     offset: 0,
-                }));
+                })));
                 self.push(res);
             }
             "split" => {
@@ -261,11 +262,11 @@ impl<'a> VM {
                     _ => return Err(VMError::BadArgument),
                 }.to_string();
                 
-                let res = Value::Iter(crate::value::Iterator::Split(crate::value::SplitIter {
+                let res = Value::Iter(Box::new(crate::value::Iterator::Split(crate::value::SplitIter {
                     source,
                     delimiter,
                     offset: 0,
-                }));
+                })));
                 self.push(res);
             }
             "nth" => {
@@ -365,14 +366,14 @@ impl<'a> VM {
                 };
                 
                 let (lambda_ip, stk) = match args[1] {
-                    Value::Fn(ip, frame) => (ip, frame),
+                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set.iter() {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
+                    self.run_lambda(code, lambda_ip,vec![item.clone()], stk)?;
                     
                     let result = self.pop()?;
                     match result {
@@ -399,7 +400,7 @@ impl<'a> VM {
                 };
                 
                 let (lambda_ip, stk) = match args[1] {
-                    Value::Fn(ip, stk) => (ip, stk),
+                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
@@ -432,7 +433,7 @@ impl<'a> VM {
                 };
                 
                 let (lambda_ip , stk) = match args[1] {
-                    Value::Fn(ip, stk) => (ip, stk),
+                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
