@@ -18,7 +18,7 @@ pub enum Value {
     Range(Range),
     Iter(Iterator),
     Fn(usize, usize),
-    Set(Vec<Value>),
+    Set(Rc<Vec<Value>>),
     Result(Box<Result<Value, Value>>),
     Cat(Option<Box<Value>>),
     File(FileHandler),
@@ -419,7 +419,7 @@ impl<'a> Value {
                 Iterator::String(iter)
             }
             Self::Iter(i) => i,
-            Self::Set(i) => Iterator::Set(i.into_iter()),
+            Self::Set(i) => Iterator::Set((*i).clone().into_iter()),
             Self::Range(range) => Iterator::Range(range),
             _ => return Err(VMError::UnExpectedType),
         };
@@ -430,7 +430,10 @@ impl<'a> Value {
     pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), VMError> {
         let index = index.expect_number()? as usize;
         match self {
-            Value::Set(v) => v[index] = to_set,
+            Value::Set(v) => {
+                let v = Rc::make_mut(v);
+                v[index] = to_set;
+            }
             _ => return Err(VMError::CantIndex)
         }
         Ok(())
@@ -440,7 +443,7 @@ impl<'a> Value {
         let res = match self {
             Value::Set(s) => {
                 let end = if end > s.len() {s.len()} else {end};
-                Value::Set(s[start..end].to_vec())
+                Value::Set(Rc::new(s[start..end].to_vec()))
             }
             Value::Str(s) => {
                 let count = s.chars().count();
@@ -459,6 +462,7 @@ impl<'a> Value {
             let idx = index[i].expect_number()? as usize;
             match current {
                 Value::Set(v) => {
+                    let v = Rc::make_mut(v);
                     current = &mut v[idx];
                 }
                 _ => return Err(VMError::CantIndex),
@@ -468,6 +472,7 @@ impl<'a> Value {
         let last_idx = index.last().unwrap().expect_number()? as usize;
         match current {
             Value::Set(v) => {
+                let v = Rc::make_mut(v);
                 v[last_idx] = to_set;
             }
             _ => return Err(VMError::CantIndex),
@@ -547,7 +552,7 @@ impl std::fmt::Display for Value {
             }
             Self::Set(s) => {
                 write!(f, "[ ")?;
-                for i in s {
+                for i in s.iter() {
                     write!(f, "{}, ", i)?;
                 }
                 write!(f, "]")

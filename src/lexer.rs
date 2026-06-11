@@ -19,6 +19,7 @@ pub enum Token<'a> {
     Loop,
     Inc, 
     Dec, 
+    Query,
     Return,
     LBracket,
     RBracket, 
@@ -225,6 +226,7 @@ impl<'a> Lexer<'a> {
                 else if self.match_next('>') {Token::Arrow}
                 else { Token::Minus }
             }
+            '?' => Token::Query,
             '!' => self.match_mext_if_else('=', Token::NotEqual, Token::Not),
             '.' => self.match_mext_if_else('.', Token::DotDot, Token::Dot),
             _ => panic!("unknown symbol: {}", ch),

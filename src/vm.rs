@@ -264,7 +264,7 @@ impl<'a> VM {
                 
                 self.sp = start_idx;
                 
-                self.push(Value::Set(vals)); 
+                self.push(Value::Set(Rc::new(vals))); 
             }
             Op::JumpIfTrue(target) => {
                 let val = self.pop()?;

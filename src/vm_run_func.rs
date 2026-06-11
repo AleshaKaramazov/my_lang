@@ -193,7 +193,10 @@ impl<'a> VM {
                 };
 
                 match &mut self.frame[id] {
-                    Value::Set(set) => set.push(args[1].clone()),
+                    Value::Set(set) =>{
+                        let set = Rc::make_mut(set);
+                        set.push(args[1].clone())
+                    }
                     _ => return Err(VMError::BadArgument),
                 }
                 self.push(Value::Void);
@@ -304,7 +307,7 @@ impl<'a> VM {
                     }
                 }
                 
-                self.push(Value::Set(result_set));
+                self.push(Value::Set(Rc::new(result_set)));
             }
             "contains" => {
                 self.need_args(2, args.len())?;
@@ -368,7 +371,7 @@ impl<'a> VM {
 
                 let mut result_set = Vec::new();
                 
-                for item in set {
+                for item in set.iter() {
                     self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let result = self.pop()?;
@@ -381,7 +384,7 @@ impl<'a> VM {
                         _ => return Err(VMError::BadArgument), 
                     }
                 }
-                self.push(Value::Set(result_set));
+                self.push(Value::Set(Rc::new(result_set)));
 
             }
             "map" => {
@@ -402,14 +405,14 @@ impl<'a> VM {
 
                 let mut result_set = Vec::new();
                 
-                for item in set {
+                for item in set.iter() {
                     self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let result = self.pop()?;
                     result_set.push(result);
                 }
                 
-                self.push(Value::Set(result_set));
+                self.push(Value::Set(Rc::new(result_set)));
 
             }
             "clear_console" => {
@@ -435,16 +438,16 @@ impl<'a> VM {
 
                 let mut result_set = Vec::new();
                 
-                for item in set {
+                for item in set.iter() {
                     self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
                     let cond = self.pop()?;
                     if cond.is_truthy() {
-                        result_set.push(item);
+                        result_set.push(item.clone());
                     }
                 }
                 
-                self.push(Value::Set(result_set));
+                self.push(Value::Set(Rc::new(result_set)));
             }
             _ => return Err(VMError::UnknownFunc),
         }
