@@ -1,9 +1,9 @@
-use crate::{
-    consts, 
-    errors::CompilerError, 
-    lexer::{Lexer, Token}, 
-    op::Op, types::Type
-};
+use crate::op::Op;
+use crate::consts;
+use crate::errors::CompilerError;
+use crate::types::Type;
+use crate::lexer::{Lexer, Token};
+
 use rustc_hash::FxHashMap;
 
 pub struct Compiler<'a> {
@@ -29,15 +29,17 @@ impl<'a> Compiler<'a> {
             variables: FxHashMap::default(),
             next_slot: 0,
             scope_depth: 0,
-            scope_changes: Vec::new(),
-            loop_contexts: Vec::new(),
+            scope_changes: Vec::with_capacity(64),
+            loop_contexts: Vec::with_capacity(16),
         }
     }
 
+    #[inline(always)]
     pub fn advance_token(&mut self) {
         self.current_token = self.lexer.next_token(); 
     }
 
+    #[inline(always)]
     pub fn next_if(&mut self, token: Token) -> bool {
         if self.current_token == token {
             self.advance_token();
@@ -47,6 +49,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    #[inline(always)]
     pub fn add_plug(&mut self, op: Op<'a>) -> usize {
         let code = self.code.len();
         self.code.push(op);
@@ -74,6 +77,7 @@ impl<'a> Compiler<'a> {
         Err(err)
     }    
 
+    #[inline(always)]
     pub fn patch_plug(&mut self, index: usize) {
         let target = self.code.len();
         match self.code[index] {
@@ -167,8 +171,9 @@ impl<'a> Compiler<'a> {
         Ok(())
     }    
 
+    #[inline(always)]
     fn expect(&mut self, token: Token) -> Result<(), CompilerError> {
-        if !self.next_if(token.clone()) {
+        if !self.next_if(token) {
             return self.throw_error(
                 CompilerError::ExpectedToken, 
                 &format!("Expected {:?}, got {:?}", token, self.current_token)
@@ -177,10 +182,12 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    #[inline(always)]
     fn parse_expression(&mut self) -> Result<(), CompilerError> {
         self.parse_range()
     }
 
+    #[inline(always)]
     fn parse_range(&mut self) -> Result<(), CompilerError> {
         self.parse_logical_or()?;
         
@@ -285,6 +292,7 @@ impl<'a> Compiler<'a> {
         }
         Ok(())
     }
+
     fn parse_arifm_or(&mut self) -> Result<(), CompilerError> {
         self.parse_arifm_and()?;
         while self.current_token == Token::ArifmOr {
@@ -368,7 +376,7 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 
-                let (var_id, var_depth, _) = *self.variables.get(name).ok_or_else(|| CompilerError::UnexpectedArg)?;
+                let (var_id, var_depth, _) = *self.variables.get(name).ok_or(CompilerError::UnexpectedArg)?;
                 let is_global = var_depth == 0;
                 let depth_delta = self.scope_depth - var_depth;
 

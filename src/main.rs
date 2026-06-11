@@ -25,7 +25,7 @@ fn main() {
     match q.compile() {
         Ok(code) => {
             let mut vm = vm::VM::new();
-            if let Err(e) = vm.run(&code) {
+            if let Err(e) = vm.run(&code, 0) {
                 println!("error: {:?}", e)
             }
         }

@@ -5,7 +5,10 @@ use std::{
     path::{PathBuf}, 
     rc::Rc
 };
-use crate::{consts, value::Value, errors::VMError};
+
+use crate::consts;
+use crate::errors::VMError;
+use crate::value::Value;
 
 #[derive(Debug, Clone)]
 pub struct FileHandler {
@@ -53,7 +56,7 @@ impl FileHandler {
         }
     }
     
-    pub fn read<'a>(&mut self) -> Value {
+    pub fn read(&mut self) -> Value {
         if let Err(e) = self.file.borrow_mut().seek(std::io::SeekFrom::Start(0)) {
             return Value::Result(Box::new(Err(Value::Str(Rc::new(
                     format!("Error while trying seek the file({}): {}", self.path.display(), e))))))

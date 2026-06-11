@@ -1,7 +1,9 @@
 use std::{fs, io::{Read, Write}, rc::Rc};
-use crate::{
-    consts, errors::VMError, op::Op, value::{Iterator, Value}, vm::{CallFrame, VM}
-};
+use crate::op::Op;
+use crate::consts;
+use crate::errors::VMError;
+use crate::value::{Iterator, Value};
+use crate:: vm::{CallFrame, VM};
 
 impl<'a> VM {
     fn format(args: &[Value]) -> Result<String, VMError> {
@@ -23,7 +25,7 @@ impl<'a> VM {
                     }
                     Some(&'}') => {
                         chars.next();
-                        let value = values.next().ok_or_else(|| VMError::NeedMoreArgs)?;
+                        let value = values.next().ok_or(VMError::NeedMoreArgs)?;
                         output.push_str(&value.to_string());
                     }
                     _ => return Err(VMError::BadArgument),
@@ -98,15 +100,12 @@ impl<'a> VM {
                             
                         let mut buffer = vec![0u8; consts::READ_AT_ONCE];
                         
-                        let res = file_ref.read(&mut buffer)
-                            .map_err(|e| format!("Error while trying read the file ({}): {}", f, e))
-                            .and_then(|bb| {
-                                Ok(String::from_utf8_lossy(&buffer[..bb])
-                                    .into_owned())
-                            })
-                            .map(|x| Value::Str(Rc::new(x)));
+                        
 
-                        res
+                        file_ref.read(&mut buffer)
+                            .map_err(|e| format!("Error while trying read the file ({}): {}", f, e)).map(|bb| String::from_utf8_lossy(&buffer[..bb])
+                                    .into_owned())
+                            .map(|x| Value::Str(Rc::new(x)))
                     },
                     _ => return Err(VMError::BadArgument)
                 };
@@ -343,7 +342,7 @@ impl<'a> VM {
                 let new_line = i.ends_with("ln");
 
                 let res = if let Some((first, rest)) = args.split_first_mut() {
-                    Self::write(first, rest, new_line).map(|_| Value::Void).map_err(|_| format!("error with write"))
+                    Self::write(first, rest, new_line).map(|_| Value::Void).map_err(|_| "error with write".to_string())
                 } else {unreachable!()};
 
                 self.push(Value::new_control(res));
@@ -351,7 +350,7 @@ impl<'a> VM {
             i if i.starts_with("print") => {
                 let new_line = i.ends_with("ln"); 
                 let res = 
-                    Self::write(std::io::stdout(), &args, new_line).map(|_| Value::Void).map_err(|_| format!("error with write into: stdout"));
+                    Self::write(std::io::stdout(), &args, new_line).map(|_| Value::Void).map_err(|_| "error with write into: stdout".to_string());
                 self.push(Value::new_control(res));
             }
             "filter_map" => {
@@ -375,7 +374,7 @@ impl<'a> VM {
                 for item in set.iter() {
                     self.run_lambda(code, lambda_ip,vec![item.clone()], stk)?;
                     
-                    let result = self.pop()?;
+                    let result = self.pop();
                     match result {
                         Value::Cat(res) => {
                             if let Some(res) =  res {
@@ -409,7 +408,7 @@ impl<'a> VM {
                 for item in set.iter() {
                     self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
-                    let result = self.pop()?;
+                    let result = self.pop();
                     result_set.push(result);
                 }
                 
@@ -442,7 +441,7 @@ impl<'a> VM {
                 for item in set.iter() {
                     self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
                     
-                    let cond = self.pop()?;
+                    let cond = self.pop();
                     if cond.is_truthy() {
                         result_set.push(item.clone());
                     }
@@ -482,11 +481,7 @@ impl<'a> VM {
         self.now_frame = self.frame.len();
         self.frame.extend(args);
 
-        let mut ip = target_ip;
-        while ip != consts::STOP_FLAG && ip < code.len() {
-            self.step(&code, &mut ip)?;
-        }
-
+        self.run(code, target_ip)?;
         Ok(())
     }
 }

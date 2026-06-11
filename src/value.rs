@@ -66,7 +66,7 @@ impl Iterator {
     fn next(&mut self) -> Option<Value> {
         match self {
             Self::Set(i) => i.next(),
-            Self::String(s) => s.next().map(|x| Value::Char(x)),
+            Self::String(s) => s.next().map(Value::Char),
             Iterator::Range(range) => {
                 let current = range.start;
                 
@@ -197,7 +197,7 @@ impl std::io::Write for Value {
     }
 }
 
-impl<'a> Value {
+impl Value {
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Void => false,
@@ -302,7 +302,7 @@ impl<'a> Value {
         match (self, rhs) {
             (_, Value::Number(0)) => Err(VMError::ZeroDiv),
             (Value::Number(a), Value::Number(b)) => { *a /= b; Ok(()) }
-            (_, Value::Float(f)) if f == 0.0 => Err(VMError::ZeroDiv),
+            (_, Value::Float(0.0)) => Err(VMError::ZeroDiv),
             (Value::Float(a), Value::Float(b)) => { *a /= b; Ok(()) }
             (Value::Float(a), Value::Number(b)) => { *a /= b as f64; Ok(()) }
             (s @ Value::Number(_), Value::Float(b)) => {
@@ -363,8 +363,8 @@ impl<'a> Value {
             }
             (Value::Result(res), Type::Result(inner)) => {
                 match &**res {
-                    Ok(val) => val.this_type(&(*inner).0),
-                    Err(val) => val.this_type(&(*inner).1),
+                    Ok(val) => val.this_type(&inner.0),
+                    Err(val) => val.this_type(&inner.1),
                 }
             }
             (Value::Cat(cat), Type::Cat(inner_ty)) => {
@@ -456,12 +456,11 @@ impl<'a> Value {
     pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), VMError> {
         let mut current = self;
 
-        for i in 0..index.len() - 1 {
-            let idx = index[i].expect_number()? as usize;
+        for idx in index.iter().take(index.len() - 1).map(|x| x.expect_number()) {
             match current {
                 Value::Set(v) => {
                     let v = Rc::make_mut(v);
-                    current = &mut v[idx];
+                    current = &mut v[idx? as usize];
                 }
                 _ => return Err(VMError::CantIndex),
             }
@@ -483,7 +482,7 @@ impl<'a> Value {
         let mut current = self.clone();
 
         for i in index.iter() {
-            current = current.load_index(&i)?.clone();
+            current = current.load_index(i)?.clone();
         }
         Ok(current.clone())
     }
@@ -507,7 +506,7 @@ impl<'a> Value {
                         v[i.rem_euclid(v.len() as i64) as usize].clone(),
                     Value::Str(s) => {
                         let index = i.rem_euclid(s.chars().count() as i64) as usize;
-                        s.chars().nth(index).map(|x| Value::Char(x)).unwrap()
+                        s.chars().nth(index).map(Value::Char).unwrap()
                     }
                     _ => return Err(VMError::CantIndex)
                 }
@@ -538,7 +537,7 @@ impl std::fmt::Display for Value {
             Self::Char(c) => write!(f, "{}", c),
             Self::Str(s) => write!(f, "{}", s),
             Self::Ref(i) => write!(f, "REF<ID: {}>", i),
-            Self::Fn(i, _) => write!(f, "FN<ID: {}>", i),
+            Self::Fn(_, _) => write!(f, "FN"),
             Self::Iter(i) => write!(f, "Iter<{:?}>", i),
             Value::Cat(c) => if let Some(c) = c {
                 write!(f, "Cat<{}>", c)
