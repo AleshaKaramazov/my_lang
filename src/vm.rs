@@ -14,10 +14,13 @@ pub struct VM {
     pub now_frame: usize,
 }
 
+pub const MAX_DEPTH: usize = 16;
+
 pub struct CallFrame {
     pub return_ip: usize, 
     pub old_frame: usize, 
-    pub static_link: usize, 
+    pub display: [usize; MAX_DEPTH], 
+    pub depth: usize,
     pub frame_idx: usize,   
 }
 
@@ -67,12 +70,8 @@ impl<'a> VM {
         if depth_delta == 0 {
             return self.now_frame;
         }
-        let mut current_idx = self.call_stack.last().unwrap().static_link;
-        
-        for _ in 1..depth_delta {
-            current_idx = self.call_stack[current_idx].static_link;
-        }
-        self.call_stack[current_idx].frame_idx
+        let call_frame = self.call_stack.last().unwrap();
+        call_frame.display[call_frame.depth - depth_delta] 
     }
 
     #[inline(always)]
@@ -478,10 +477,26 @@ impl<'a> VM {
                             let next_frame_idx = self.frame.len();
                             let current_idx = unsafe { ip_ptr.offset_from(base_ptr) as usize };
 
+                            let (display, depth) = if (env_frame as usize) < self.call_stack.len() {
+                                let parent = &self.call_stack[env_frame as usize];
+                                let mut d = parent.display; 
+                                let current_depth = parent.depth;
+                                
+                                if current_depth >= MAX_DEPTH {
+                                    return Err(VMError::FuncErr); 
+                                }
+                                
+                                d[current_depth] = parent.frame_idx;
+                                (d, current_depth + 1)
+                            } else {
+                                ([0; MAX_DEPTH], 0)
+                            };
+
                             self.call_stack.push(CallFrame {
                                 return_ip: current_idx + 1, 
                                 old_frame: self.now_frame,
-                                static_link: env_frame as usize, 
+                                display,
+                                depth, 
                                 frame_idx: next_frame_idx,
                             });
 
@@ -490,7 +505,7 @@ impl<'a> VM {
                             
                             ip_ptr = unsafe { base_ptr.add(target_ip as usize) };
                             continue;
-                        }                        
+                        }                   
                         _ => return Err(VMError::FuncErr),
                     }
                 }

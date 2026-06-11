@@ -469,11 +469,22 @@ impl<'a> VM {
         }
     }
    
-    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, static_link: usize) -> Result<(), VMError> {
+    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, env_frame: usize) -> Result<(), VMError> {
+        let (display, depth) = if env_frame < self.call_stack.len() {
+            let parent = &self.call_stack[env_frame];
+            let mut d = parent.display;
+            let current_depth = parent.depth;
+            d[current_depth] = parent.frame_idx;
+            (d, current_depth + 1)
+        } else {
+            ([0; crate::vm::MAX_DEPTH], 0)
+        };
+
         self.call_stack.push(CallFrame {
             return_ip: consts::STOP_FLAG, 
             old_frame: self.now_frame,
-            static_link,
+            display,
+            depth,
             frame_idx: self.frame.len()
         });
 
