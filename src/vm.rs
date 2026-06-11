@@ -97,24 +97,25 @@ impl<'a> VM {
                 if self.sp == 0 { return Err(VMError::EmptyStack); }
                 let val = unsafe { self.stack.get_unchecked(self.sp - 1) };
                 if !val.this_type(&tp) {
+                    println!("Expected: {:?}, find: {}", tp, val);
                     return Err(VMError::UnExpectedType);
                 }
             }
             Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
                 let right = unsafe { self.pop().unwrap_unchecked() };
-                let left = unsafe { self.pop().unwrap_unchecked() };
-                let result = match *op {
-                    Op::Plus => (left + right)?,
-                    Op::Sub => (left - right)?,
-                    Op::Mult => (left * right)?,
-                    Op::Div => (left / right)?,
-                    Op::Pow => left.pow(right)?,
-                    Op::ArifmAnd => left.arifm_and(right)?,
-                    Op::ArifmOr => left.arifm_or(right)?,
-                    Op::Mod => left.arifm_mod(right)?,
+                let left = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                
+                match *op {
+                    Op::Plus => left.add_assign(right)?,
+                    Op::Sub => left.sub_assign(right)?,
+                    Op::Mult => left.mul_assign(right)?,
+                    Op::Div => left.div_assign(right)?,
+                    Op::Pow => left.pow_assign(right)?,
+                    Op::ArifmAnd => left.arifm_and_assign(right)?,
+                    Op::ArifmOr => left.arifm_or_assign(right)?,
+                    Op::Mod => left.arifm_mod_assign(right)?,
                     _ => unreachable!(),
-                };
-                self.push(result);
+                }
             }
             Op::Equal | Op::NotEqual | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
                 let right = unsafe { self.pop().unwrap_unchecked() };

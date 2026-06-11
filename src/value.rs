@@ -1,4 +1,3 @@
-use std::ops::{Add, Sub, Mul, Div};
 use std::cmp::Ordering;
 use std::vec::IntoIter;
 
@@ -227,6 +226,128 @@ impl<'a> Value {
     pub fn new_file(filename: &str, opt: i64) -> Result<Self, VMError> {
         Ok(Value::File(FileHandler::open(filename, opt)?))
     }
+    pub fn add_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a += b; Ok(()) }
+            (Value::Float(a), Value::Float(b)) => { *a += b; Ok(()) }
+            (Value::Float(a), Value::Number(b)) => { *a += b as f64; Ok(()) }
+            (s @ Value::Number(_), Value::Float(b)) => {
+                let a = s.expect_number()?;
+                *s = Value::Float(a as f64 + b);
+                Ok(())
+            }
+            (Value::Str(a), b) => {
+                match b {
+                    Value::Str(s2) => a.push_str(&s2),
+                    Value::Char(c) => a.push(c),
+                    _ => a.push_str(&b.to_string()),
+                }
+                Ok(())
+            }
+            (s @ Value::Char(_), b) => {
+                let mut new_str = s.to_string();
+                match b {
+                    Value::Str(s2) => new_str.push_str(&s2),
+                    Value::Char(c) => new_str.push(c),
+                    _ => new_str.push_str(&b.to_string()),
+                }
+                *s = Value::Str(new_str);
+                Ok(())
+            }
+            (s, Value::Str(b)) => {
+                let mut new_str = s.to_string();
+                new_str.push_str(&b);
+                *s = Value::Str(new_str);
+                Ok(())
+            }
+            (s, Value::Char(b)) => {
+                let mut new_str = s.to_string();
+                new_str.push(b);
+                *s = Value::Str(new_str);
+                Ok(())
+            }
+            _ => Err(VMError::BadOperand),
+        }
+    }
+
+    pub fn sub_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a -= b; Ok(()) }
+            (Value::Float(a), Value::Float(b)) => { *a -= b; Ok(()) }
+            (Value::Float(a), Value::Number(b)) => { *a -= b as f64; Ok(()) }
+            (s @ Value::Number(_), Value::Float(b)) => {
+                let a = s.expect_number()?;
+                *s = Value::Float(a as f64 - b);
+                Ok(())
+            }
+            _ => Err(VMError::BadOperand),
+        }
+    }
+
+    pub fn mul_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a *= b; Ok(()) }
+            (Value::Float(a), Value::Float(b)) => { *a *= b; Ok(()) }
+            (Value::Float(a), Value::Number(b)) => { *a *= b as f64; Ok(()) }
+            (s @ Value::Number(_), Value::Float(b)) => {
+                let a = s.expect_number()?;
+                *s = Value::Float(a as f64 * b);
+                Ok(())
+            }
+            _ => Err(VMError::BadOperand),
+        }
+    }
+
+    pub fn div_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (_, Value::Number(0)) => Err(VMError::ZeroDiv),
+            (Value::Number(a), Value::Number(b)) => { *a /= b; Ok(()) }
+            (_, Value::Float(f)) if f == 0.0 => Err(VMError::ZeroDiv),
+            (Value::Float(a), Value::Float(b)) => { *a /= b; Ok(()) }
+            (Value::Float(a), Value::Number(b)) => { *a /= b as f64; Ok(()) }
+            (s @ Value::Number(_), Value::Float(b)) => {
+                let a = s.expect_number()?;
+                *s = Value::Float(a as f64 / b);
+                Ok(())
+            }
+            _ => Err(VMError::BadOperand),
+        }
+    }
+
+    pub fn arifm_and_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a &= b; Ok(()) }
+            _ => Err(VMError::NotOperation),
+        }
+    }
+
+    pub fn arifm_or_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a |= b; Ok(()) }
+            _ => Err(VMError::NotOperation),
+        }
+    }
+
+    pub fn arifm_mod_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => { *a %= b; Ok(()) }
+            _ => Err(VMError::NotOperation),
+        }
+    }
+
+    pub fn pow_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+        match (self, rhs) {
+            (Value::Number(a), Value::Number(b)) => {
+                if b < 0 {
+                    Err(VMError::BadOperand)
+                } else {
+                    *a = a.pow(b as u32);
+                    Ok(())
+                }
+            }
+            _ => Err(VMError::NotOperation),
+        }
+    }
 
     pub fn this_type(&self, expected: &Type) -> bool {
         match (self, expected) {
@@ -388,39 +509,6 @@ impl<'a> Value {
         Ok(val)
     }
 
-    pub fn arifm_and(self, rhs: Self) -> Result<Value, VMError> {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a & b)),
-            _ => Err(VMError::NotOperation),
-        }
-    }
-
-    pub fn arifm_or(self, rhs: Self) -> Result<Value, VMError> {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a | b)),
-            _ => Err(VMError::NotOperation),
-        }
-    }
-
-    pub fn arifm_mod(self, rhs: Self) -> Result<Value, VMError> {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a % b)),
-            _ => Err(VMError::NotOperation),
-        }
-    }
-
-    pub fn pow(self, rhs: Self) -> Result<Value, VMError> {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => {
-                if b < 0 {
-                    Err(VMError::BadOperand)
-                } else {
-                    Ok(Value::Number(a.pow(b as u32)))
-                }
-            }
-            _ => Err(VMError::NotOperation),
-        }
-    }
 }
 
 impl std::fmt::Display for Value {
@@ -509,72 +597,6 @@ impl PartialOrd for Value {
             (Value::Result(a), Value::Result(b)) => a.partial_cmp(b),
             
             _ => None, 
-        }
-    }
-}
-
-impl<'a> Add for Value {
-    type Output = Result<Value, VMError>;
-    fn add(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a + b as f64)),
-            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 + b)),
-            (Value::Str(a), b) => {
-                Ok(Value::Str(format!("{}{}", a, b)))
-            },
-            (b, Value::Str(a)) => {
-                Ok(Value::Str(format!("{}{}", b, a)))
-            },
-            (Value::Char(a), b) => {
-                Ok(Value::Str(format!("{}{}", a, b)))
-            },
-            (b, Value::Char(a)) => {
-                Ok(Value::Str(format!("{}{}", b, a)))
-            }
-            _ => Err(VMError::BadOperand),
-        }
-    }
-}
-
-impl<'a> Sub for Value {
-    type Output = Result<Value, VMError>;
-    fn sub(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a - b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a - b as f64)),
-            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 - b)),
-            _ => Err(VMError::BadOperand),
-        }
-    }
-}
-
-impl<'a> Mul for Value {
-    type Output = Result<Value, VMError>;
-    fn mul(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * b)),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a * b as f64)),
-            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
-            _ => Err(VMError::BadOperand),
-        }
-    }
-}
-
-impl<'a> Div for Value {
-    type Output = Result<Value, VMError>;
-    fn div(self, rhs: Self) -> Self::Output {
-        match (self, rhs) {
-            (Value::Number(_), Value::Number(0)) => Err(VMError::ZeroDiv),
-            (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a / b)),
-            (Value::Float(_), Value::Float(0.0)) => Err(VMError::ZeroDiv),
-            (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-            (Value::Float(a), Value::Number(b)) => Ok(Value::Float(a / b as f64)),
-            (Value::Number(a), Value::Float(b)) => Ok(Value::Float(a as f64 / b)),
-            _ => Err(VMError::BadOperand),
         }
     }
 }

@@ -1,4 +1,9 @@
-use crate::{consts, errors::CompilerError, lexer::{Lexer, Token}, op::Op, types::Type};
+use crate::{
+    consts, 
+    errors::CompilerError, 
+    lexer::{Lexer, Token}, 
+    op::Op, types::Type
+};
 use rustc_hash::FxHashMap;
 
 pub struct Compiler<'a> {
