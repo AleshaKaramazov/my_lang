@@ -1,4 +1,4 @@
-use std::{fs, io::{Read, Write}};
+use std::{fs, io::{Read, Write}, rc::Rc};
 use crate::{
     consts, errors::VMError, op::Op, value::Value, vm::{CallFrame, VM}
 };
@@ -82,7 +82,7 @@ impl<'a> VM {
 
                 let res = match &args[1] {
                     Value::Char(c) => res.starts_with(*c),
-                    Value::Str(c) => res.starts_with(c),
+                    Value::Str(c) => res.starts_with(&**c),
                     unk => res.starts_with(&unk.to_string()) 
                 };
                 self.push(Value::Bool(res));
@@ -104,7 +104,7 @@ impl<'a> VM {
                                 Ok(String::from_utf8_lossy(&buffer[..bb])
                                     .into_owned())
                             })
-                            .map(Value::Str);
+                            .map(|x| Value::Str(Rc::new(x)));
 
                         res
                     },
@@ -115,7 +115,7 @@ impl<'a> VM {
 
             "format" => {
                 let format: String = Self::format(&args)?;
-                self.push(Value::Str(format));
+                self.push(Value::Str(Rc::new(format)));
             }
             "enumerate" => {
                 self.need_args(1, args.len())?;
@@ -132,7 +132,7 @@ impl<'a> VM {
                         self.push(q)
                     }
                     Value::Str(filename) => {
-                        let res = fs::read_to_string(filename).map(|x| Value::Str(x)).map_err(|x| x.to_string());
+                        let res = fs::read_to_string(&**filename).map(|x| Value::Str(Rc::new(x))).map_err(|x| x.to_string());
                         self.push(Value::new_control(res));
                     }
                     _ => return Err(VMError::BadArgument)
@@ -206,14 +206,14 @@ impl<'a> VM {
                 }
                 let mut s = String::new();
                 let _ = std::io::stdin().read_line(&mut s);
-                self.push(Value::Str(s.trim().to_string()));
+                self.push(Value::Str(Rc::new(s.trim().to_string())));
             }
             "parse" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
                 let res = match arg.parse() {
                     Ok(num) => Value::Result(Box::new(Ok(Value::Number(num)))),
-                    Err(e) => Value::Result(Box::new(Err(Value::Str(e.to_string())))),
+                    Err(e) => Value::Result(Box::new(Err(Value::Str(Rc::new(e.to_string()))))),
                 };
                 self.push(res);
             }
@@ -325,13 +325,13 @@ impl<'a> VM {
             "to_lower" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
-                let res = Value::Str(arg.to_lowercase());
+                let res = Value::Str(Rc::new(arg.to_lowercase()));
                 self.push(res);
             }
             "to_upper" => {
                 self.need_args(1, args.len())?;
                 let arg = self.deref(&mut args[0]).eval_str()?;
-                let res = Value::Str(arg.to_uppercase());
+                let res = Value::Str(Rc::new(arg.to_uppercase()));
                 self.push(res);
             }
             i if i.starts_with("write") => {

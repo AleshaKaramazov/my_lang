@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     op::Op, 
     value::Value,
@@ -77,7 +79,7 @@ impl<'a> VM {
         let op = unsafe {code.get_unchecked(*ip) } ;
         match op {
             Op::PushFLoat(f) => self.push(Value::Float(*f)),
-            Op::PushStr(s) => self.push(Value::Str(s.to_string())),
+            Op::PushStr(s) => self.push(Value::Str(Rc::new(s.to_string()))),
             Op::PushChar(c) => self.push(Value::Char(*c)),
             Op::PushNumber(n) => self.push(Value::Number(*n)),
             Op::PushBool(b) => self.push(Value::Bool(*b)),

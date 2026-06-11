@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::rc::Rc;
 use std::vec::IntoIter;
 
 use crate::consts;
@@ -10,7 +11,7 @@ use crate::types::Type;
 pub enum Value {
     Void,
     Number(i64),
-    Str(String),
+    Str(Rc<String>),
     Char(char),
     Bool(bool),
     Ref(usize),
@@ -98,7 +99,7 @@ impl Iterator {
                     let mut chars = tail.chars();
                     if let Some(c) = chars.next() {
                         iter.offset += c.len_utf8();
-                        return Some(Value::Str(c.to_string()));
+                        return Some(Value::Str(Rc::new(c.to_string())))
                     } else {
                         iter.offset = iter.source.len() + 1;
                         return None;
@@ -108,10 +109,10 @@ impl Iterator {
                 if let Some(pos) = tail.find(&iter.delimiter) {
                     let part = &tail[..pos];
                     iter.offset += pos + iter.delimiter.len();
-                    Some(Value::Str(part.to_string()))
+                    Some(Value::Str(Rc::new(part.to_string())))
                 } else {
                     iter.offset = iter.source.len() + 1; 
-                    Some(Value::Str(tail.to_string()))
+                    Some(Value::Str(Rc::new(tail.to_string())))
                 }
             }
 
@@ -127,10 +128,10 @@ impl Iterator {
                     if let Some(end_pos) = word_tail.find(|c: char| c.is_whitespace()) {
                         let word = &word_tail[..end_pos];
                         iter.offset += start_pos + end_pos;
-                        Some(Value::Str(word.to_string()))
+                        Some(Value::Str(Rc::new(word.to_string())))
                     } else {
                         iter.offset = iter.source.len();
-                        Some(Value::Str(word_tail.to_string()))
+                        Some(Value::Str(Rc::new(word_tail.to_string())))
                     }
                 } else {
                     iter.offset = iter.source.len();
@@ -152,11 +153,11 @@ impl Iterator {
                     }
                     
                     iter.offset += newline_pos + 1;
-                    Some(Value::Str(line.to_string()))
+                    Some(Value::Str(Rc::new(line.to_string())))
                 } else {
                     let line = tail;
                     iter.offset = iter.source.len();
-                    Some(Value::Str(line.to_string()))
+                    Some(Value::Str(Rc::new(line.to_string())))
                 }
             }
         } 
@@ -169,7 +170,7 @@ impl std::io::Write for Value {
             f.file.borrow_mut().write(buf) 
         } else if let Value::Str(filepath) = self {
             if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true).append(true).open(filepath) {
+                .create(true).append(true).open(&**filepath) {
                 f.write(buf)
             }  
             else {
@@ -219,7 +220,7 @@ impl<'a> Value {
     pub fn open_file(filename: &str) -> Self {
         Value::Result(Box::new(
             FileHandler::new_file(filename)
-                .map(|x| Value::File(x)).map_err(|_| Value::Str(format!("error with open file")))
+                .map(|x| Value::File(x)).map_err(|_| Value::Str(Rc::new(format!("error with open file: {}", filename))))
         ))
     }
 
@@ -237,6 +238,7 @@ impl<'a> Value {
                 Ok(())
             }
             (Value::Str(a), b) => {
+                let a = Rc::make_mut(a);
                 match b {
                     Value::Str(s2) => a.push_str(&s2),
                     Value::Char(c) => a.push(c),
@@ -251,19 +253,18 @@ impl<'a> Value {
                     Value::Char(c) => new_str.push(c),
                     _ => new_str.push_str(&b.to_string()),
                 }
-                *s = Value::Str(new_str);
-                Ok(())
+                *s = Value::Str(Rc::new(new_str)); Ok(())
             }
             (s, Value::Str(b)) => {
                 let mut new_str = s.to_string();
                 new_str.push_str(&b);
-                *s = Value::Str(new_str);
+                *s = Value::Str(Rc::new(new_str));
                 Ok(())
             }
             (s, Value::Char(b)) => {
                 let mut new_str = s.to_string();
                 new_str.push(b);
-                *s = Value::Str(new_str);
+                *s = Value::Str(Rc::new(new_str));
                 Ok(())
             }
             _ => Err(VMError::BadOperand),
@@ -407,7 +408,7 @@ impl<'a> Value {
     pub fn new_control(res: Result<Value, String>) -> Value {
         Value::Result(Box::new(match res {
             Ok(res) => Ok(res),
-            Err(er) => Err(Value::Str(er))
+            Err(er) => Err(Value::Str(Rc::new(er)))
         }))
     }
 
@@ -444,7 +445,7 @@ impl<'a> Value {
             Value::Str(s) => {
                 let count = s.chars().count();
                 let end = if end > count {count} else {end};
-                Value::Str(s[start..end].to_string())
+                Value::Str(Rc::new(s[start..end].to_string()))
             }
             _ => return Err(VMError::UnExpectedType),
         };

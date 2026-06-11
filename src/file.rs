@@ -55,15 +55,15 @@ impl FileHandler {
     
     pub fn read<'a>(&mut self) -> Value {
         if let Err(e) = self.file.borrow_mut().seek(std::io::SeekFrom::Start(0)) {
-            return Value::Result(Box::new(Err(Value::Str(
-                    format!("Error while trying seek the file({}): {}", self.path.display(), e)))))
+            return Value::Result(Box::new(Err(Value::Str(Rc::new(
+                    format!("Error while trying seek the file({}): {}", self.path.display(), e))))))
         }
 
         let mut buffer = String::new();
         let val = if let Err(e) = self.file.borrow_mut().read_to_string(&mut buffer) {
             Err(format!("Error while trying read the file({}): {}", self.path.display(), e))
         } else {
-            Ok(Value::Str(buffer))
+            Ok(Value::Str(Rc::new(buffer)))
         };
         Value::new_control(val)
     }
