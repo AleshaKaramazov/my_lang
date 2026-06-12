@@ -6,6 +6,7 @@ use crate::lexer::{Lexer, Token};
 
 use rustc_hash::FxHashMap;
 
+type ChangedScope = Option<(usize, usize, Option<Type>)>;
 pub struct Compiler<'a> {
     source: &'a str,
     code: Vec<Op<'a>>,
@@ -15,7 +16,7 @@ pub struct Compiler<'a> {
     functions_args: FxHashMap<&'a str, Vec<Type>>,
     next_slot: usize,
     scope_depth: usize,
-    scope_changes: Vec<(&'a str, Option<(usize, usize)>)>,
+    scope_changes: Vec<(&'a str, ChangedScope)>,
     loop_contexts: Vec<(usize, Vec<usize>)>,
 }
 
@@ -675,7 +676,7 @@ impl<'a> Compiler<'a> {
                         self.next_slot += 1;
 
                         let expr_type = self.parse_equality()?;
-                        let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(expr_type))).map(|(one, two, _)| (one, two));
+                        let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(expr_type)));
                         self.scope_changes.push((name, old_val));
 
                         if self.scope_depth == 0 {
@@ -704,20 +705,9 @@ impl<'a> Compiler<'a> {
                 self.advance_token();
                 self.expect(Token::RParen)?;
                 self.expect(Token::Assign)?;
-
                 let expr_type = self.parse_equality()?;
 
-                if is_right {
-                    if token_kind == Token::Ok && !matches!(expr_type, Type::Result(_) | Type::Infer) {
-                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Result type");
-                    } else if token_kind == Token::Some && !matches!(expr_type, Type::Cat(_) | Type::Infer) {
-                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Option type");
-                    }
-                } else {
-                    if !matches!(expr_type, Type::Result(_) | Type::Infer) {
-                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Result type");
-                    }
-                }
+                self.code.push(Op::Dup); 
 
                 let fail_jump = self.code.len();
                 if is_right {
@@ -739,7 +729,7 @@ impl<'a> Compiler<'a> {
                 let var_id = self.next_slot;
                 self.next_slot += 1;
 
-                let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type))).map(|(one, two, _)| (one, two));
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type)));
                 self.scope_changes.push((name, old_val));
 
                 if self.scope_depth == 0 {
@@ -747,6 +737,8 @@ impl<'a> Compiler<'a> {
                 } else {
                     self.code.push(Op::StoreLocal(var_id, 0));
                 }
+
+                self.code.push(Op::Pop); 
 
                 self.code.push(Op::PushBool(true));
                 let end_jump = self.add_plug(Op::Jump(0));
@@ -758,6 +750,8 @@ impl<'a> Compiler<'a> {
                     self.code[fail_jump] = Op::SafeUnwL(target);
                 }
 
+                self.code.push(Op::Pop); 
+                
                 self.code.push(Op::PushBool(false));
                 self.patch_plug(end_jump);
                 Type::Bool
@@ -965,7 +959,7 @@ impl<'a> Compiler<'a> {
 
                 let var_id = self.next_slot;
                 self.next_slot += 1;
-                let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp))).map(|(a, b, _)| (a, b));
+                let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp)));
                 self.scope_changes.push((name, old_value));
 
                 if self.scope_depth == 0 {
@@ -980,7 +974,7 @@ impl<'a> Compiler<'a> {
             
             let var_id = self.next_slot;
             self.next_slot += 1;
-            let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp))).map(|(a, b, _)| (a, b));
+            let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp)));
             self.scope_changes.push((name, old_value));
 
             if self.scope_depth == 0 {
@@ -998,7 +992,7 @@ impl<'a> Compiler<'a> {
         let func_id = if let Some(name) = func_name {
             let id = self.next_slot;
             self.next_slot += 1;
-            let old_func_val = self.variables.insert(name, (id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
+            let old_func_val = self.variables.insert(name, (id, self.scope_depth, None));
             self.scope_changes.push((name, old_func_val));
             Some(id)
         } else {
@@ -1092,7 +1086,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                if let Some(prev_slot) = old_val {
                     self.variables.insert(name, prev_slot); 
                 } else {
                     self.variables.remove(name); 
@@ -1225,7 +1219,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                if let Some(prev_slot) = old_val {
                     self.variables.insert(name, prev_slot); 
                 } else {
                     self.variables.remove(name); 
@@ -1263,7 +1257,7 @@ impl<'a> Compiler<'a> {
                     let var_id = self.next_slot;
                     self.next_slot += 1;
 
-                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(match_type.clone()))).map(|(x, y, _)| (x, y));
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(match_type.clone())));
                     self.scope_changes.push((name, old_val));
 
                     if self.scope_depth == 0 {
@@ -1319,7 +1313,7 @@ impl<'a> Compiler<'a> {
                     let var_id = self.next_slot;
                     self.next_slot += 1;
 
-                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type))).map(|(x, y, _)| (x, y));
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type)));
                     self.scope_changes.push((name, old_val));
 
                     if self.scope_depth == 0 {
@@ -1404,7 +1398,7 @@ impl<'a> Compiler<'a> {
 
             while self.scope_changes.len() > start_change_idx {
                 if let Some((name, old_val)) = self.scope_changes.pop() {
-                    if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                    if let Some(prev_slot) = old_val {
                         self.variables.insert(name, prev_slot);
                     } else {
                         self.variables.remove(name);
@@ -1426,7 +1420,6 @@ impl<'a> Compiler<'a> {
         }
 
         self.expect(Token::End)?;
-
         self.code.push(Op::Pop);
         self.code.push(Op::PushVoid);
 
@@ -1722,7 +1715,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                if let Some(prev_slot) = old_val {
                     self.variables.insert(name, prev_slot);
                 } else {
                     self.variables.remove(name);
@@ -1797,7 +1790,7 @@ impl<'a> Compiler<'a> {
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
-                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                if let Some(prev_slot) = old_val {
                     self.variables.insert(name, prev_slot);
                 } else {
                     self.variables.remove(name);

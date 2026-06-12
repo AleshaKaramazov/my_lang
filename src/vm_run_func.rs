@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fs, io::{Read, Write}, rc::Rc};
+use std::{cell::RefCell, fs, io::{Read, Seek, Write}, rc::Rc};
 use crate::op::Op;
 use crate::consts;
 use crate::errors::VMError;
@@ -59,11 +59,10 @@ impl<'a> VM {
         Ok(())
     }
 
-    pub fn run_func(&mut self, func: i64, mut args: Vec<Value>, code: &[Op<'a>]) -> Result<(), VMError> {
+    pub fn run_func(&mut self, func: i64, args_count: usize, code: &[Op<'a>]) -> Result<(), VMError> {
          match func { 
             1 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]);
+                let arg = self.deref(&self.stack[self.sp]);
                 let res = match arg {
                     Value::Str(s) => Value::Number(s.borrow().chars().count() as i64),
                     Value::Set(s) => Value::Number(s.borrow().len() as i64),
@@ -72,28 +71,28 @@ impl<'a> VM {
                 self.push(res);
             }
             2 => {
-                self.need_args(2, args.len())?;
                 let res = {
-                    let res = match &args[0] {
+                    let s_val = match &self.stack[self.sp] {
                         Value::Str(s) => s,
                         Value::Ref(idx) => match &self.frame[*idx] {
                             Value::Str(s) => s,
                             _ => return Err(VMError::BadArgument),
                         }
                         _ => return Err(VMError::BadArgument),
-                    }.borrow();
+                    };
+                    let res_str = s_val.borrow();
 
-                    match &args[1] {
-                        Value::Char(c) => res.starts_with(*c),
-                        Value::Str(c) => res.starts_with(&*c.borrow()),
-                        unk => res.starts_with(&unk.to_string()) 
+                    let pattern_val = self.deref(&self.stack[self.sp + 1]);
+                    match pattern_val {
+                        Value::Char(c) => res_str.starts_with(*c),
+                        Value::Str(c) => res_str.starts_with(&*c.borrow()),
+                        unk => res_str.starts_with(&unk.to_string()) 
                     }
                 };
                 self.push(Value::Bool(res));
             }
             3 => {
-                self.need_args(1, args.len())?;
-                let val = self.deref(&mut args[0]);
+                let val = self.deref(&self.stack[self.sp]);
                 
                 let res = match val {
                     Value::File(f) => {
@@ -114,41 +113,47 @@ impl<'a> VM {
                 self.push(Value::new_control(res));
             }
             4 => {
-                let format: String = Self::format(&args)?;
+                let format: String = Self::format(&self.stack[self.sp..self.sp + args_count])?;
                 self.push(Value::Str(Rc::new(RefCell::new(format))));
             }
             5  => {
-                self.need_args(1, args.len())?;
-                
-                let target = self.deref(&mut args[0]).clone().make_iter()?;
+                let target = self.deref(&self.stack[self.sp]).clone().make_iter()?;
                 self.push(Value::Iter(Box::new(crate::value::Iterator::Enumerate(Box::new(target), 0))));
             }
             6 => {
-                self.need_args(1, args.len())?;
-                let val = self.deref(&mut args[0]);
-                match val {
+                let val = self.deref(&self.stack[self.sp]);
+                let res = match val {
                     Value::File(f) => {
-                        let q = f.read();
-                        self.push(q)
-                    }
+                        if let Err(e) = f.file.borrow_mut().seek(std::io::SeekFrom::Start(0)) {
+                            Value::Result(Box::new(Err(Value::new_str(
+                                format!("Error while trying seek the file({}): {}", f.path.display(), e)))))
+                        } else {
+                            let mut buffer = String::new();
+                            let val = if let Err(e) = f.file.borrow_mut().read_to_string(&mut buffer) {
+                                Err(format!("Error while trying read the file({}): {}", f.path.display(), e))
+                            } else {
+                                Ok(Value::new_str(buffer))
+                            };
+                            Value::new_control(val)
+                        }
+                    },
                     Value::Str(filename) => {
                         let res = fs::read_to_string(&*filename.borrow()).map(Value::new_str).map_err(|x| x.to_string());
-                        self.push(Value::new_control(res));
+                        Value::new_control(res)
                     }
                     _ => return Err(VMError::BadArgument)
-                }
+                };
+                self.push(res);
             }
             7 => {
-                self.need_args(1, args.len())?;
-                let filename = args[0].eval_str()?;
+                let filename = self.stack[self.sp].eval_str();
                 let file = Value::open_file(&filename);
                 self.push(file); 
             }
             8 => {
-                self.need_args(1, args.len())?;
-                let filename = args[0].eval_str()?;
-                let opt = if let Some(i) = args.get(1) {
-                    i.expect_number()?
+                let filename = self.stack[self.sp].eval_str();
+                let opt = if args_count > 1 {
+                    self.stack[self.sp + 1].expect_number()?
                 } else {
                     consts::ALL_FLAGS
                 };
@@ -156,8 +161,7 @@ impl<'a> VM {
                 self.push(res); 
             }
             9 => {
-                self.need_args(1, args.len())?;
-                let val = self.deref(&mut args[0]);
+                let val = self.deref(&self.stack[self.sp]);
                 let res = match val {
                     Value::Result(s) => Value::Bool(s.is_ok()),
                     _ => return Err(VMError::BadArgument),
@@ -166,8 +170,7 @@ impl<'a> VM {
 
             }
             10 => {
-                self.need_args(1, args.len())?;
-                let val = self.deref(&mut args[0]);
+                let val = self.deref(&self.stack[self.sp]);
                 let res = match val {
                     Value::Str(s) => Value::Bool(s.borrow().is_empty()),
                     Value::Set(s) => Value::Bool(s.borrow().is_empty()),
@@ -177,8 +180,7 @@ impl<'a> VM {
 
             }
             11 => {
-                self.need_args(1, args.len())?;
-                let val = self.deref(&mut args[0]);
+                let val = self.deref(&self.stack[self.sp]);
                 let res = match val {
                     Value::Cat(s) => Value::Bool(s.is_some()),
                     _ => return Err(VMError::BadArgument),
@@ -186,23 +188,22 @@ impl<'a> VM {
                 self.push(res);
             }
             12 => {
-                self.need_args(1, args.len())?;
-                let id = match &args[0] {
+                let id = match &self.stack[self.sp] {
                     Value::Ref(idx) => *idx,
                     _ => return Ok(()),
                 };
 
                 match &mut self.frame[id] {
                     Value::Set(set) =>{
-                        set.borrow_mut().push(args[1].clone())
+                        set.borrow_mut().push(self.stack[self.sp + 1].clone())
                     }
                     _ => return Err(VMError::BadArgument),
                 }
                 self.push(Value::Void);
             }
             13 => {
-                if !args.is_empty() {
-                    let format = Self::format(&args)?;
+                if args_count > 0 {
+                    let format = Self::format(&self.stack[self.sp..self.sp + args_count])?;
                     print!("{}", format);
                     let _ = std::io::stdout().flush();
                 }
@@ -211,8 +212,7 @@ impl<'a> VM {
                 self.push(Value::new_str(s.trim()));
             }
             14 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = match arg.parse() {
                     Ok(num) => Value::Result(Box::new(Ok(Value::Number(num)))),
                     Err(e) => Value::Result(Box::new(Err(Value::new_str(e.to_string())))),
@@ -220,19 +220,17 @@ impl<'a> VM {
                 self.push(res);
             }
             15 => {
-                self.need_args(1, args.len())?;
-                let mut arg = if let Value::Iter(i) = &args[0]
+                let mut arg = if let Value::Iter(i) = &self.stack[self.sp]
                     && let Iterator::Range(r) = **i {
                         r
                 } else {
                     return Err(VMError::BadArgument)
                 };
-                arg.step = args[1].expect_number()?;
+                arg.step = self.stack[self.sp + 1].expect_number()?;
                 self.push(Value::Iter(Box::new(Iterator::Range(arg))));
             }
             16 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 
                 let res = Value::Iter(Box::new(crate::value::Iterator::Lines(crate::value::LinesIter {
                     source: arg.to_string(),
@@ -242,9 +240,7 @@ impl<'a> VM {
                 self.push(res);
             }
             17 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]).eval_str()?;
-                
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = Value::Iter(Box::new(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
                     source: arg.to_string(),
                     offset: 0,
@@ -252,11 +248,9 @@ impl<'a> VM {
                 self.push(res);
             }
             18 => {
-                self.need_args(2, args.len())?;
-                let delimiter = args[1].eval_str()?;
-                
-                let source = match &args[0] {
-                    Value::Ref(i) => self.frame[*i].eval_str()?,
+                let delimiter = self.stack[self.sp + 1].eval_str();
+                let source = match &self.stack[self.sp] {
+                    Value::Ref(i) => self.frame[*i].eval_str(),
                     Value::Str(arg) => arg.borrow().to_string(),
                     _ => return Err(VMError::BadArgument),
                 };
@@ -269,15 +263,17 @@ impl<'a> VM {
                 self.push(res);
             }
             19 => {
-                self.need_args(2, args.len())?;
-                let n = args[1].expect_number()?;
+                let n = self.stack[self.sp + 1].expect_number()?;
                 if n < 0 {
                     return Err(VMError::BadArgument);
                 }
 
                 let mut result = None;
                 {
-                    let iter_ref = self.deref(&mut args[0]);
+                    let iter_ref = match &mut self.stack[self.sp] {
+                        Value::Ref(i) => &mut self.frame[*i],
+                        arg => arg,
+                    };
                     
                     for _ in 0..=n {
                         match iter_ref.next()? {
@@ -297,25 +293,27 @@ impl<'a> VM {
                 self.push(res);
             }
             20 => {
-                self.need_args(1, args.len())?;
                 let mut result_set = Vec::new();
-                
                 {
-                    let iter_ref = self.deref(&mut args[0]);
+                    let iter_ref = match &mut self.stack[self.sp] {
+                        Value::Ref(i) => &mut self.frame[*i],
+                        arg => arg,
+                    };
                     while let Some(val) = iter_ref.next()? {
                         result_set.push(val);
                     }
                 }
-                
                 self.push(Value::Set(Rc::new(RefCell::new(result_set))));
             }
             21 => {
-                self.need_args(2, args.len())?;
-                let arg = self.deref(&mut args[0]).to_string();
-                let pattern = args[1].to_string();
+                let arg = self.deref(&self.stack[self.sp]).to_string();
+                let pattern = self.stack[self.sp + 1].to_string();
 
-                let res = if let Some(Value::Bool(i)) = args.get(2) && *i {
-                    if let Some(Value::Bool(i)) = args.get(3) && *i {
+                let ignore_case = args_count > 2 && self.stack[self.sp + 2].is_truthy();
+                let exact_pattern = args_count > 3 && self.stack[self.sp + 3].is_truthy();
+                
+                let res = if ignore_case {
+                    if exact_pattern {
                         arg.to_lowercase().contains(&pattern) 
                     } else {
                         arg.to_lowercase().contains(&pattern.to_lowercase()) 
@@ -326,36 +324,33 @@ impl<'a> VM {
                 self.push(Value::Bool(res));
             }
             22 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = Value::new_str(arg.to_lowercase());
                 self.push(res);
             }
             23 => {
-                self.need_args(1, args.len())?;
-                let arg = self.deref(&mut args[0]).eval_str()?;
+                let arg = match &mut self.stack[self.sp] {
+                    Value::Ref(i) => &mut self.frame[*i],
+                    arg => arg,
+                }.eval_str();
                 let res = Value::new_str(arg.to_uppercase());
                 self.push(res);
             }
             24 | 25 => {
-                self.need_args(1, args.len())?;
                 let new_line = func == 25;
 
-                let res = if let Some((first, rest)) = args.split_first_mut() {
-                    Self::write(first, rest, new_line).map(|_| Value::Void).map_err(|_| "error with write".to_string())
-                } else {unreachable!()};
-
+                let res = Self::write(self.stack[self.sp].clone(), &self.stack[self.sp + 1..self.sp + args_count], new_line)
+                    .map(|_| Value::Void).map_err(|_| "error with write".to_string());
                 self.push(Value::new_control(res));
             }
             26 | 27 => {
                 let new_line = func == 27;
                 let res = 
-                    Self::write(std::io::stdout(), &args, new_line).map(|_| Value::Void).map_err(|_| "error with write into: stdout".to_string());
+                    Self::write(std::io::stdout(), &self.stack[self.sp..self.sp + args_count], new_line).map(|_| Value::Void).map_err(|_| "error with write into: stdout".to_string());
                 self.push(Value::new_control(res));
             }
             28 => {
-                self.need_args(2, args.len())?;
-                let set = match &args[0] {
+                let set = match &self.stack[self.sp] {
                     Value::Set(s) => s.clone(),
                     Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Set(s) => s.clone(),
@@ -364,7 +359,7 @@ impl<'a> VM {
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let (lambda_ip, stk) = match args[1] {
+                let (lambda_ip, stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
@@ -388,8 +383,7 @@ impl<'a> VM {
 
             }
             29 => {
-                self.need_args(2, args.len())?;
-                let set = match &args[0] {
+                let set = match &self.stack[self.sp] {
                     Value::Set(s) => s.clone(),
                     Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Set(s) => s.clone(),
@@ -398,7 +392,7 @@ impl<'a> VM {
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let (lambda_ip, stk) = match args[1] {
+                let (lambda_ip, stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
@@ -420,8 +414,7 @@ impl<'a> VM {
                 self.push(Value::Void)
             },
             31 => {
-                self.need_args(2, args.len())?;
-                let set = match &args[0] {
+                let set = match &self.stack[self.sp] {
                     Value::Set(s) => s.clone(),
                     Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Set(s) => s.clone(),
@@ -430,7 +423,7 @@ impl<'a> VM {
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let (lambda_ip , stk) = match args[1] {
+                let (lambda_ip , stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
@@ -454,18 +447,10 @@ impl<'a> VM {
     } 
 
     #[inline(always)]
-    pub fn need_args(&mut self, need: usize, have: usize) -> Result<(), VMError> {
-        if need > have {
-            return Err(VMError::NeedMoreArgs) 
-        }
-        Ok(())
-    }
-
-    #[inline(always)]
-    pub fn deref(&'a mut self, arg: &'a mut Value) -> &'a mut Value {
+    pub fn deref(&'a self, arg: &'a Value) -> &'a Value {
         match arg {
-            Value::Ref(i) => &mut self.frame[*i],
-            _ => arg,
+            Value::Ref(i) => unsafe {&self.frame.get_unchecked(*i)},
+            _ => arg
         }
     }
    

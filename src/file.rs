@@ -1,14 +1,12 @@
 use std::{
     cell::RefCell, 
     fs::{File, OpenOptions}, 
-    io::{Read, Seek},
     path::{PathBuf}, 
     rc::Rc
 };
 
 use crate::consts;
 use crate::errors::VMError;
-use crate::value::Value;
 
 #[derive(Debug, Clone)]
 pub struct FileHandler {
@@ -56,19 +54,5 @@ impl FileHandler {
         }
     }
     
-    pub fn read(&mut self) -> Value {
-        if let Err(e) = self.file.borrow_mut().seek(std::io::SeekFrom::Start(0)) {
-            return Value::Result(Box::new(Err(Value::new_str(
-                    format!("Error while trying seek the file({}): {}", self.path.display(), e)))))
-        }
-
-        let mut buffer = String::new();
-        let val = if let Err(e) = self.file.borrow_mut().read_to_string(&mut buffer) {
-            Err(format!("Error while trying read the file({}): {}", self.path.display(), e))
-        } else {
-            Ok(Value::new_str(buffer))
-        };
-        Value::new_control(val)
-    }
 }
 

@@ -208,10 +208,11 @@ impl Value {
         }
     }
 
-    pub fn eval_str(&self) -> Result<String, VMError> {
+    #[inline(always)]
+    pub fn eval_str(&self) -> String {
         match self {
-            Self::Str(s) => Ok(s.borrow().to_string()),
-            _ => Err(VMError::UnExpectedType)
+            Value::Str(s) => s.borrow().to_string(),
+            _ => unsafe {std::hint::unreachable_unchecked() }, 
         }
     }
 

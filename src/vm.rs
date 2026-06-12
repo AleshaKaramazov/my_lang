@@ -195,10 +195,18 @@ impl<'a> VM {
                         let start = self.sp - count;
                         let mut vals = Vec::with_capacity(count);
                         
-                        for i in start..(self.sp - 1) {
-                            vals.push(std::mem::replace(&mut self.stack[i], Value::Void));
+                        unsafe {
+                            let src = self.stack.as_mut_ptr().add(start);
+                            let dst = vals.as_mut_ptr();
+                            
+                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
+                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::Void));
+                            vals.set_len(count);
+                            
+                            for i in 0..(count - 1) {
+                                std::ptr::write(src.add(i), Value::Void);
+                            }
                         }
-                        vals.push(std::mem::replace(&mut self.tos, Value::Void));
                         
                         self.tos = Value::Tuple(Rc::new(RefCell::new(vals)));
                         self.sp = start + 1;
@@ -339,31 +347,35 @@ impl<'a> VM {
                         let start = self.sp - count;
                         let mut vals = Vec::with_capacity(count);
                         
-                        for i in start..(self.sp - 1) {
-                            vals.push(std::mem::replace(&mut self.stack[i], Value::Void));
+                        unsafe {
+                            let src = self.stack.as_mut_ptr().add(start);
+                            let dst = vals.as_mut_ptr();
+                            
+                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
+                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::Void));
+                            vals.set_len(count);
+                            
+                            for i in 0..(count - 1) {
+                                std::ptr::write(src.add(i), Value::Void);
+                            }
                         }
-                        vals.push(std::mem::replace(&mut self.tos, Value::Void));
                         
                         self.tos = Value::Set(Rc::new(RefCell::new(vals)));
                         self.sp = start + 1;
                     }
                 }
                 Op::DupTarget(deep) => {
-                    let deep = *deep;
-                    let count = deep + 1;
+                    let count = *deep + 1;
                     let start = self.sp - count;
-                    let mut to_dup = Vec::with_capacity(count);
                     
-                    for i in start..(self.sp - 1) {
-                        to_dup.push(self.stack[i].clone());
-                    }
-                    to_dup.push(self.tos.clone());
-                    
-                    for val in to_dup {
+                    for i in 0..(count - 1) {
+                        let val = unsafe { self.stack.get_unchecked(start + i) }.clone();
                         self.push(val);
                     }
+                    let tos_clone = self.tos.clone();
+                    self.push(tos_clone);
                 }
-                Op::StoreIndex(count) => {
+               Op::StoreIndex(count) => {
                     let count = *count;
                     let to_set = self.pop();
                     
@@ -371,10 +383,18 @@ impl<'a> VM {
                         let mut indexes = Vec::with_capacity(count);
                         let start = self.sp - count;
                         
-                        for i in start..(self.sp - 1) {
-                            indexes.push(std::mem::replace(&mut self.stack[i], Value::Void));
+                        unsafe {
+                            let src = self.stack.as_mut_ptr().add(start);
+                            let dst = indexes.as_mut_ptr();
+                            
+                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
+                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::Void));
+                            indexes.set_len(count);
+                            
+                            for i in 0..(count - 1) {
+                                std::ptr::write(src.add(i), Value::Void);
+                            }
                         }
-                        indexes.push(std::mem::replace(&mut self.tos, Value::Void));
                         
                         self.sp = start;
                         if self.sp > 0 {
@@ -390,18 +410,25 @@ impl<'a> VM {
                         target.set_index(index, to_set)?;
                         self.push(target);
                     }
-                }
-
+                }                
                 Op::LoadIndex(count) => {
                     let count = *count;
                     let res = if count > 1 {
                         let mut indexes = Vec::with_capacity(count);
                         let start = self.sp - count;
                         
-                        for i in start..(self.sp - 1) {
-                            indexes.push(std::mem::replace(&mut self.stack[i], Value::Void));
+                        unsafe {
+                            let src = self.stack.as_mut_ptr().add(start);
+                            let dst = indexes.as_mut_ptr();
+                            
+                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
+                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::Void));
+                            indexes.set_len(count);
+                            
+                            for i in 0..(count - 1) {
+                                std::ptr::write(src.add(i), Value::Void);
+                            }
                         }
-                        indexes.push(std::mem::replace(&mut self.tos, Value::Void));
                         
                         self.sp = start;
                         if self.sp > 0 {
@@ -453,21 +480,42 @@ impl<'a> VM {
                     
                     match func_val {
                         Value::Number(func) => {
-                            let mut args = Vec::with_capacity(*n);
-                            for _ in 0..*n {
-                                args.push(self.pop());
+                            if *n > 0 {
+                                self.stack[self.sp - 1] = std::mem::replace(&mut self.tos, Value::Void);
+                                
+                                self.sp -= n;
+                                
+                                if self.sp > 0 {
+                                    self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::Void);
+                                }
                             }
-                            args.reverse();
-                            self.run_func(func, args, code)?;
+                            
+                            self.run_func(func, *n, code)?;
                         }
                         Value::Fn(target_ip, env_frame) => { 
-                            let mut args = Vec::with_capacity(*n);
-                            for _ in 0..*n {
-                                args.push(self.pop());
+                            let next_frame_idx = self.frame.len(); 
+                            if *n > 0 {
+                                self.stack[self.sp - 1] = std::mem::replace(&mut self.tos, Value::Void);
+                                self.sp -= n;
+                                
+                                self.frame.reserve(*n);
+                                unsafe {
+                                    let src = self.stack.as_mut_ptr().add(self.sp);
+                                    let dst = self.frame.as_mut_ptr().add(self.frame.len());
+                                    
+                                    std::ptr::copy_nonoverlapping(src, dst, *n);
+                                    self.frame.set_len(self.frame.len() + *n);
+                                    
+                                    for i in 0..*n {
+                                        std::ptr::write(src.add(i), Value::Void);
+                                    }
+                                }
+                                
+                                if self.sp > 0 {
+                                    self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::Void);
+                                }
                             }
-                            args.reverse();
 
-                            let next_frame_idx = self.frame.len();
                             let current_idx = unsafe { ip_ptr.offset_from(base_ptr) as usize };
 
                             let (display, depth) = if (env_frame as usize) < self.call_stack.len() {
@@ -494,11 +542,10 @@ impl<'a> VM {
                             });
 
                             self.now_frame = next_frame_idx;
-                            self.frame.extend(args);
                             
                             ip_ptr = unsafe { base_ptr.add(target_ip as usize) };
                             continue;
-                        }                   
+                        }           
                         _ => return Err(VMError::FuncErr),
                     }
                 }
