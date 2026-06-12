@@ -2,11 +2,9 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 use std::vec::IntoIter;
-
 use crate::consts;
 use crate::errors::VMError;
 use crate::file::FileHandler;
-use crate::types::Type;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -351,35 +349,7 @@ impl Value {
         }
     }
 
-    pub fn this_type(&self, expected: &Type) -> bool {
-        match (self, expected) {
-            (Value::Number(_), Type::Number) => true,
-            (Value::File(_), Type::File) => true,
-            (Value::Float(_), Type::Float) => true,
-            (Value::Void, Type::Void) => true,
-            (Value::Str(_), Type::Str) => true,
-            (Value::Bool(_), Type::Bool) => true,
-            (Value::Void, Type::Result(inner)) => matches!(inner.0, Type::Void),
-            (Value::Set(arr), Type::Set(inner_type)) => {
-                arr.borrow().iter().all(|val| val.this_type(inner_type))
-            }
-            (Value::Result(res), Type::Result(inner)) => {
-                match &**res {
-                    Ok(val) => val.this_type(&inner.0),
-                    Err(val) => val.this_type(&inner.1),
-                }
-            }
-            (Value::Cat(cat), Type::Cat(inner_ty)) => {
-                match cat {
-                    Some(val) => val.this_type(inner_ty),
-                    None => true, 
-                }
-            }
-            _ => false,
-        }
-    }    
-
-    pub fn next(&mut self) -> Result<Option<Value>, VMError> {
+   pub fn next(&mut self) -> Result<Option<Value>, VMError> {
         match self {
             Value::Iter(i) => Ok(i.next()),
             _ => Err(VMError::CantIter)

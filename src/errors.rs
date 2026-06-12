@@ -5,7 +5,6 @@ pub enum CompilerError {
     UnfindedVar,
     ExpectedToken,
     UnknownFunc,
-    UnExpectedType,
 }
 
 #[derive(Debug)]

@@ -12,6 +12,7 @@ pub struct Compiler<'a> {
     current_token: Token<'a>,
     lexer: Lexer<'a>,
     variables: FxHashMap<&'a str, (usize, usize, Option<Type>)>,
+    functions_args: FxHashMap<&'a str, Vec<Type>>,
     next_slot: usize,
     scope_depth: usize,
     scope_changes: Vec<(&'a str, Option<(usize, usize)>)>,
@@ -27,6 +28,7 @@ impl<'a> Compiler<'a> {
             current_token: Token::Begin, 
             lexer, 
             variables: FxHashMap::default(),
+            functions_args: FxHashMap::default(),
             next_slot: 0,
             scope_depth: 0,
             scope_changes: Vec::with_capacity(64),
@@ -89,6 +91,41 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    pub fn types_match(expected: &Type, actual: &Type) -> bool {
+        match (expected, actual) {
+            (Type::Infer, _) | (_, Type::Infer) => true,
+            (Type::Set(a), Type::Set(b)) => Self::types_match(a, b),
+            (Type::Iter(a), Type::Iter(b)) => Self::types_match(a, b),
+            (Type::Cat(a), Type::Cat(b)) => Self::types_match(a, b),
+            (Type::Result(a), Type::Void) if a.0 == Type::Void  => true,
+            (Type::Result(a), Type::Result(b)) => Self::types_match(&a.0, &b.0) && Self::types_match(&a.1, &b.1),
+            (a, b) => a == b,
+        }
+    }
+
+    fn check_std_func_args(&self, name: &str, args: &[Type]) -> Result<(), CompilerError> {
+        let is_valid = match name {
+            "len" | "enumerate" | "is_ok" | "is_empty" | "is_some" | "collect" => args.len() == 1,
+            "readch" | "read" => args.len() == 1,
+            "readln" | "clear_console" => true,
+            "format" | "write" | "writeln" | "print" | "println" => true,
+            "create" | "truncate" | "open" | "parse" | "lines" | "split_whitespace" | "to_lower" | "to_upper" => {
+                args.len() == 1 && Self::types_match(&Type::Str, &args[0])
+            },
+            "starts_with" | "split" => {
+                args.len() == 2 && Self::types_match(&Type::Str, &args[0]) && (Self::types_match(&Type::Str, &args[1]) || Self::types_match(&Type::Char, &args[1]))
+            },
+            "contains" => args.len() > 1,
+            "push" | "step" | "filter_map" | "map" | "filter" => args.len() == 2,
+            "nth" => args.len() == 2 && Self::types_match(&Type::Number, &args[1]),
+            _ => true,
+        };
+        if !is_valid {
+            return self.throw_error(CompilerError::UnexpectedArg, "Invalid arguments for standard function");
+        }
+        Ok(())
+    }
+
     pub fn parse_for(&mut self) -> Result<(), CompilerError> {
         self.advance_token(); 
         
@@ -108,6 +145,11 @@ impl<'a> Compiler<'a> {
         self.expect(Token::In)?;
         
         let iter_type = self.parse_expression()?;     
+
+        if !matches!(iter_type, Type::Iter(_) | Type::Set(_) | Type::Infer) {
+            return self.throw_error(CompilerError::UnexpectedArg, "Expected iterable type in for loop");
+        }
+
         self.code.push(Op::MakeIter); 
         
         let elem_type = match iter_type {
@@ -198,13 +240,19 @@ impl<'a> Compiler<'a> {
         let mut tp = self.parse_logical_or()?;
         
         if self.current_token == Token::DotDot {
+            if !Self::types_match(&tp, &Type::Number) {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in range");
+            }
             tp = Type::Iter(Box::new(Type::Number));
             self.advance_token();
             let incl = self.next_if(Token::Assign);
             if self.current_token == Token::RBracket {
                 self.code.push(Op::PushNumber(i64::MAX)); 
             } else {
-                self.parse_logical_or()?;
+                let oth_tp = self.parse_logical_or()?;
+                if !Self::types_match(&oth_tp, &Type::Number) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number in range end");
+                }
             }
             self.code.push(Op::MakeRange(incl));
         }
@@ -215,12 +263,17 @@ impl<'a> Compiler<'a> {
         let mut tp = self.parse_logical_and()?;
 
         while self.current_token == Token::Or {
-            tp = Type::Bool;
+            if !Self::types_match(&tp, &Type::Bool) && tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in logical OR");
+            }
             self.advance_token();
 
             let jump_true_1 = self.add_plug(Op::JumpIfTrue(0));
             
-            self.parse_logical_and()?;
+            let oth_tp = self.parse_logical_and()?;
+            if !Self::types_match(&oth_tp, &Type::Bool) && oth_tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in logical OR");
+            }
             let jump_true_2 = self.add_plug(Op::JumpIfTrue(0));
 
             self.code.push(Op::PushBool(false));
@@ -231,19 +284,26 @@ impl<'a> Compiler<'a> {
             self.code.push(Op::PushBool(true));
 
             self.patch_plug(jump_end);
+            tp = Type::Bool;
         }
         Ok(tp)
     }
 
     fn parse_logical_and(&mut self) -> Result<Type, CompilerError> {
-        self.parse_equality()?; 
+        let mut tp = self.parse_equality()?; 
 
         while self.current_token == Token::LogicalAnd { 
+            if !Self::types_match(&tp, &Type::Bool) && tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in logical AND");
+            }
             self.advance_token();
 
             let jump_false_1 = self.add_plug(Op::JumpIfFalse(0));
             
-            self.parse_equality()?; 
+            let oth_tp = self.parse_equality()?; 
+            if !Self::types_match(&oth_tp, &Type::Bool) && oth_tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in logical AND");
+            }
             
             let jump_false_2 = self.add_plug(Op::JumpIfFalse(0));
 
@@ -255,53 +315,44 @@ impl<'a> Compiler<'a> {
             self.code.push(Op::PushBool(false));
 
             self.patch_plug(jump_end);
+            tp = Type::Bool;
         }
-        Ok(Type::Bool)
+        Ok(tp)
     }
 
     fn parse_equality(&mut self) -> Result<Type, CompilerError> {
         let mut tp = self.parse_relational()?;
 
         while self.current_token == Token::Equal || self.current_token == Token::NotEqual { 
-            tp = Type::Bool;
             let op = if self.current_token == Token::Equal {Op::Equal} else {Op::NotEqual};
             self.advance_token();
-            self.parse_relational()?;
+            let oth_tp = self.parse_relational()?;
+            if !Self::types_match(&tp, &oth_tp) {
+                return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in equality operator");
+            }
             self.code.push(op);
+            tp = Type::Bool;
         }
         Ok(tp)
     }
 
     fn parse_relational(&mut self) -> Result<Type, CompilerError> {
         let mut tp = self.parse_arifm_or()?;
-        loop {
-            match self.current_token {
-                Token::Greater => { 
-                    tp = Type::Bool;
-                    self.advance_token();
-                    self.parse_arifm_or()?;
-                    self.code.push(Op::Greater);
-                }
-                Token::Less => { 
-                    tp = Type::Bool;
-                    self.advance_token();
-                    self.parse_arifm_or()?;
-                    self.code.push(Op::Less);
-                }
-                Token::GreaterOrEqual => { 
-                    tp = Type::Bool;
-                    self.advance_token();
-                    self.parse_arifm_or()?;
-                    self.code.push(Op::GreaterEq);
-                }
-                Token::LessOrEqual => { 
-                    tp = Type::Bool;
-                    self.advance_token();
-                    self.parse_arifm_or()?;
-                    self.code.push(Op::LessEq);
-                }
-                _ => break,
+        while matches!(self.current_token, Token::Greater | Token::Less | Token::GreaterOrEqual | Token::LessOrEqual ) {
+            let op = match self.current_token {
+                Token::Greater => Op::Greater,
+                Token::Less => Op::Less,
+                Token::GreaterOrEqual => Op::GreaterEq,
+                Token::LessOrEqual => Op::LessEq,
+                _ => unreachable!()
+            };
+            self.advance_token();
+            let oth_tp = self.parse_arifm_or()?;
+            if !Self::types_match(&tp, &oth_tp) {
+                return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in relational operator");
             }
+            self.code.push(op);
+            tp = Type::Bool;
         }
         Ok(tp)
     }
@@ -309,10 +360,16 @@ impl<'a> Compiler<'a> {
     fn parse_arifm_or(&mut self) -> Result<Type, CompilerError> {
         let mut tp = self.parse_arifm_and()?;
         while self.current_token == Token::ArifmOr {
-            tp = Type::Number;
             self.advance_token();
-            self.parse_arifm_and()?;
+            let oth_tp = self.parse_arifm_and()?;
+            if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in bitwise OR");
+            }
+            if !Self::types_match(&oth_tp, &Type::Number) && oth_tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in bitwise OR");
+            }
             self.code.push(Op::ArifmOr);
+            tp = Type::Number;
         }
         Ok(tp)
     }
@@ -320,10 +377,16 @@ impl<'a> Compiler<'a> {
     fn parse_arifm_and(&mut self) -> Result<Type, CompilerError> {
         let mut tp = self.parse_term()?;
         while self.current_token == Token::ArifmAnd {
-            tp = Type::Number;
             self.advance_token();
-            self.parse_term()?;
+            let oth_tp = self.parse_term()?;
+            if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in bitwise AND");
+            }
+            if !Self::types_match(&oth_tp, &Type::Number) && oth_tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in bitwise AND");
+            }
             self.code.push(Op::ArifmAnd);
+            tp = Type::Number;
         }
         Ok(tp)
     }
@@ -335,11 +398,31 @@ impl<'a> Compiler<'a> {
             self.advance_token(); 
             let oth_tp = self.parse_factor()?;  
 
-            tp = match (oth_tp, tp) {
-                (Type::Str, _) | (Type::Char, _) | (_, Type::Str) | (_, Type::Char) => Type::Str,
-                (Type::Float, _) | (_, Type::Float) => Type::Float,
-                _ => Type::Number,
-            };
+            if is_plus && (tp == Type::Str || oth_tp == Type::Str) {
+                if !Self::types_match(&tp, &Type::Str) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in string concatenation");
+                }
+                if !Self::types_match(&oth_tp, &Type::Str) && oth_tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in string concatenation");
+                }
+                tp = Type::Str;
+            } else if tp == Type::Float || oth_tp == Type::Float {
+                if !Self::types_match(&tp, &Type::Float) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected float");
+                }
+                if !Self::types_match(&oth_tp, &Type::Float) && oth_tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected float");
+                }
+                tp = Type::Float;
+            } else {
+                if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number");
+                }
+                if !Self::types_match(&oth_tp, &Type::Number) && oth_tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number");
+                }
+                tp = Type::Number;
+            }
 
             if is_plus {
                 self.code.push(Op::Plus);
@@ -358,11 +441,23 @@ impl<'a> Compiler<'a> {
             self.advance_token();
             let oth_tp = self.parse_power()?;
 
-            tp = match (oth_tp, tp) {
-                (Type::Str, _) | (Type::Char, _) | (_, Type::Str) | (_, Type::Char) => Type::Str,
-                (Type::Float, _) | (_, Type::Float) => Type::Float,
-                _ => Type::Number,
-            };
+            if tp == Type::Float || oth_tp == Type::Float {
+                if !Self::types_match(&tp, &Type::Float) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected float");
+                }
+                if !Self::types_match(&oth_tp, &Type::Float) && oth_tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected float");
+                }
+                tp = Type::Float;
+            } else {
+                if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number");
+                }
+                if !Self::types_match(&oth_tp, &Type::Number) && oth_tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number");
+                }
+                tp = Type::Number;
+            }
 
             if is_star {
                 self.code.push(Op::Mult);
@@ -377,10 +472,18 @@ impl<'a> Compiler<'a> {
         let mut tp = self.parse_unary()?;
 
         if self.current_token == Token::Pow || self.current_token == Token::Mod {
-            tp = Type::Number;
             let oper = if self.current_token == Token::Pow {Op::Pow} else {Op::Mod};
             self.advance_token();
-            self.parse_power()?;
+            let oth_tp = self.parse_power()?;
+            
+            if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in power/mod operation");
+            }
+            if !Self::types_match(&oth_tp, &Type::Number) && oth_tp != Type::Infer {
+                return self.throw_error(CompilerError::UnexpectedArg, "Expected number in power/mod operation");
+            }
+
+            tp = Type::Number;
             self.code.push(oper);
         }
         Ok(tp)
@@ -390,7 +493,10 @@ impl<'a> Compiler<'a> {
         match self.current_token {
             Token::Not => {
                 self.advance_token();
-                self.parse_unary()?; 
+                let tp = self.parse_unary()?; 
+                if !Self::types_match(&tp, &Type::Bool) && tp != Type::Infer {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in logical NOT");
+                }
                 self.code.push(Op::Not);
                 Ok(Type::Bool) 
             }
@@ -405,7 +511,16 @@ impl<'a> Compiler<'a> {
                 };
                 self.advance_token();
                 
-                let (var_id, var_depth, _) = *self.variables.get(name).ok_or(CompilerError::UnexpectedArg)?;
+                let (var_id, var_depth, var_type) = if let Some((vid, vd, tp)) = self.variables.get(name) {
+                    (*vid, *vd, tp.clone())
+                } else {
+                    return Err(CompilerError::UnexpectedArg)
+                };
+                
+                if !Self::types_match(&var_type.unwrap_or(Type::Infer), &Type::Number) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number for inc/dec operation");
+                }
+
                 let is_global = var_depth == 0;
                 let depth_delta = self.scope_depth - var_depth;
 
@@ -518,7 +633,10 @@ impl<'a> Compiler<'a> {
                 if self.current_token == Token::RBracket {
                     self.code.push(Op::PushNumber(i64::MAX)); 
                 } else {
-                    self.parse_expression()?;
+                    let end_tp = self.parse_expression()?;
+                    if !Self::types_match(&end_tp, &Type::Number) {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Expected number in range");
+                    }
                 }
                 self.code.push(Op::MakeRange(incl));
                 Type::Iter(Box::new(Type::Number))
@@ -572,11 +690,11 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::PushBool(false));
                         self.patch_plug(end_jump);
 
-                        return Ok(Type::Void) 
+                        return Ok(Type::Bool) 
                     } 
                     _ => return Err(CompilerError::UnexpectedArg),
                 };
-                let token_kind = self.current_token.clone();
+                let token_kind = self.current_token;
                 self.advance_token();
                 self.expect(Token::LParen)?;
                 let name = match self.current_token {
@@ -588,6 +706,18 @@ impl<'a> Compiler<'a> {
                 self.expect(Token::Assign)?;
 
                 let expr_type = self.parse_equality()?;
+
+                if is_right {
+                    if token_kind == Token::Ok && !matches!(expr_type, Type::Result(_) | Type::Infer) {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Result type");
+                    } else if token_kind == Token::Some && !matches!(expr_type, Type::Cat(_) | Type::Infer) {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Option type");
+                    }
+                } else {
+                    if !matches!(expr_type, Type::Result(_) | Type::Infer) {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Expected Result type");
+                    }
+                }
 
                 let fail_jump = self.code.len();
                 if is_right {
@@ -630,7 +760,7 @@ impl<'a> Compiler<'a> {
 
                 self.code.push(Op::PushBool(false));
                 self.patch_plug(end_jump);
-                Type::Void
+                Type::Bool
             }
             Token::None => {
                 self.advance_token();
@@ -643,9 +773,11 @@ impl<'a> Compiler<'a> {
                 let mut elem_type = Type::Infer;
                 while !self.next_if(Token::RBracket) {
                     arg_count += 1;
-                    let tp = self.parse_expression()?;
+                    let inner_tp = self.parse_expression()?;
                     if elem_type == Type::Infer {
-                        elem_type = tp;
+                        elem_type = inner_tp;
+                    } else if inner_tp != Type::Infer && !Self::types_match(&elem_type, &inner_tp) {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in array elements");
                     }
                     self.next_if(Token::Comma);
                 }
@@ -693,12 +825,18 @@ impl<'a> Compiler<'a> {
         };
         loop {
             if self.next_if(Token::LBracket) {
-                self.parse_expression()?;
+                let idx_type = self.parse_expression()?;
+                if !Self::types_match(&idx_type, &Type::Number) && !Self::types_match(&idx_type, &Type::Iter(Box::new(Type::Number))) {
+                    return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected number for index, finded: {:?}", idx_type));
+                }
                 self.expect(Token::RBracket)?;
                 let mut arg_count = 1;
                 while self.next_if(Token::LBracket) {
                     arg_count += 1;
-                    self.parse_expression()?;
+                    let inner_idx_type = self.parse_expression()?;
+                    if !Self::types_match(&inner_idx_type, &Type::Number) && !Self::types_match(&inner_idx_type, &Type::Iter(Box::new(Type::Number))) {
+                        return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected number for index, finded: {:?}", idx_type));
+                    }
                     self.expect(Token::RBracket)?;
                 }
                 self.code.push(Op::LoadIndex(arg_count));
@@ -717,7 +855,7 @@ impl<'a> Compiler<'a> {
                     return Err(CompilerError::UnexpectedArg);
                 };
                 self.expect(Token::LParen)?;
-                self.parse_func_call(method_name, true)?;
+                self.parse_func_call(method_name, Some(tp.clone()))?;
                 tp = Self::func_return_type(method_name);
             } else if self.next_if(Token::Query) {
                 self.code.push(Op::Try);
@@ -779,7 +917,7 @@ impl<'a> Compiler<'a> {
         let mut names = vec![first_name];
         let mut types = vec![];
 
-        if self.next_if(Token::Colon) {
+        if self.next_if(Token::Colon) && self.current_token != Token::Assign {
             types.push(Some(self.parse_type()?));
         } else {
             types.push(None);
@@ -812,6 +950,12 @@ impl<'a> Compiler<'a> {
 
         let expr_type = self.parse_expression()?; 
         self.next_if(Token::Semicolon);
+
+        if !is_tuple 
+            && let Some(ref t) = types[0] 
+                && !Self::types_match(t, &expr_type) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in variable declaration");
+        }
 
         if is_tuple {
             self.code.push(Op::UnpackTuple(names.len()));
@@ -904,6 +1048,14 @@ impl<'a> Compiler<'a> {
             self.advance_token();
         }
 
+        let mut expected_args = Vec::new();
+        for (_, ty) in &arg_types {
+            expected_args.push(ty.clone().unwrap_or(Type::Infer));
+        }
+        if let Some(name) = func_name {
+            self.functions_args.insert(name, expected_args);
+        }
+
         let mut explicit_ret = true;
         let exp = if let Some(tp) = exp {
             tp
@@ -915,13 +1067,18 @@ impl<'a> Compiler<'a> {
         };
 
         for (slot, ty) in arg_types {
-            if let Some(_) = ty {
+            if ty.is_some() {
                 self.code.push(Op::LoadLocal(slot, 0));
                 self.code.push(Op::Pop);
             }
         }
 
         let block_type = self.parse_block()?;        
+        
+        if explicit_ret && !Self::types_match(&exp, &block_type) {
+            return self.throw_error(CompilerError::UnexpectedArg, &format!("Return type mismatch: {:?} -- {:?}", exp, block_type));
+        }
+
         let final_return_type = if explicit_ret { exp } else { block_type };
         self.code.push(Op::Return);
 
@@ -956,10 +1113,9 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::StoreLocal(id, 0));
             }
         }
-        if let Some(name) = func_name {
-            if let Some((_, _, var_type)) = self.variables.get_mut(name) {
+        if let Some(name) = func_name 
+            && let Some((_, _, var_type)) = self.variables.get_mut(name) {
                 *var_type = Some(final_return_type);
-            }
         }
         Ok(())
     }
@@ -1129,7 +1285,7 @@ impl<'a> Compiler<'a> {
                 }
                 Token::Ok | Token::Some | Token::Err => {
                     let is_right = matches!(self.current_token, Token::Ok | Token::Some);
-                    let token_kind = self.current_token.clone();
+                    let token_kind = self.current_token;
                     self.advance_token();
                     self.expect(Token::LParen)?;
                     
@@ -1223,7 +1379,10 @@ impl<'a> Compiler<'a> {
             }
 
             if self.next_if(Token::If) {
-                self.parse_expression()?;
+                let cond_type = self.parse_expression()?;
+                if !Self::types_match(&cond_type, &Type::Bool) {
+                    return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected bool in if condition: {:?}", cond_type));
+                }
                 next_arm_jumps.push(self.code.len());
                 self.code.push(Op::JumpIfFalse(0));
             }
@@ -1235,6 +1394,8 @@ impl<'a> Compiler<'a> {
             
             if final_type == Type::Infer || final_type == Type::Void {
                 final_type = arm_type;
+            } else if arm_type != Type::Infer && arm_type != Type::Void && !Self::types_match(&final_type, &arm_type) {
+                return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in match arms");
             }
 
             self.next_if(Token::Comma);
@@ -1280,10 +1441,13 @@ impl<'a> Compiler<'a> {
         Ok(final_type)
     }
 
-    pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), CompilerError> {
+    pub fn parse_func_call(&mut self, name: &'a str, first_arg_type: Option<Type>) -> Result<(), CompilerError> {
         let mut arg_count = 0;
-        if first_arg {
+        let mut actual_arg_types = Vec::new();
+
+        if let Some(t) = first_arg_type {
             arg_count += 1;
+            actual_arg_types.push(t);
             let op = self.code.last_mut().unwrap();
             match op {
                 Op::LoadLocal(i, depth_delta) => *op = Op::PushRefLocal(*i, *depth_delta),   
@@ -1292,9 +1456,22 @@ impl<'a> Compiler<'a> {
             }
         }
         while !self.next_if(Token::RParen) {
-            self.parse_expression()?;
+            actual_arg_types.push(self.parse_expression()?);
             arg_count += 1;
             self.next_if(Token::Comma);
+        }
+
+        if let Some(expected_args) = self.functions_args.get(name) {
+            if expected_args.len() != actual_arg_types.len() {
+                return self.throw_error(CompilerError::UnexpectedArg, "Argument count mismatch");
+            }
+            for (exp, act) in expected_args.iter().zip(actual_arg_types.iter()) {
+                if !Self::types_match(exp, act) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in function arguments");
+                }
+            }
+        } else {
+            Self::check_std_func_args(self, name, &actual_arg_types)?;
         }
 
         if let Some(&(id, depth, _)) = self.variables.get(name) {
@@ -1316,17 +1493,16 @@ impl<'a> Compiler<'a> {
         self.advance_token(); 
         
         if self.next_if(Token::LParen) {
-            self.parse_func_call(name, false)?;
-            if let Some((_, _, var_type)) = self.variables.get(name) {
-                if let Some(tp) = var_type {
+            self.parse_func_call(name, None)?;
+            if let Some((_, _, var_type)) = self.variables.get(name) 
+                && let Some(tp) = var_type {
                     return Ok(tp.clone());
-                }
             }
             return Ok(Self::func_return_type(name));
         }
 
         let is_known = self.variables.contains_key(name);
-        if self.current_token == Token::Colon || !is_known && (self.current_token == Token::Comma || self.current_token == Token::Assign) {
+        if self.current_token == Token::Colon || !is_known && self.current_token == Token::Comma {
             self.parse_let(name)?;
             return Ok(Type::Void);
         }
@@ -1347,7 +1523,10 @@ impl<'a> Compiler<'a> {
             }
             while self.next_if(Token::LBracket) {
                 deep += 1;
-                self.parse_expression()?;
+                let idx_type = self.parse_expression()?;
+                if !Self::types_match(&idx_type, &Type::Number) && !Self::types_match(&idx_type, &Type::Iter(Box::new(Type::Number))) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number for index");
+                }
                 self.expect(Token::RBracket)?;
             }
             deep
@@ -1355,12 +1534,27 @@ impl<'a> Compiler<'a> {
             0
         };
 
-        let mut final_type = var_type.unwrap_or(Type::Infer);
+        let mut final_type = var_type.clone().unwrap_or(Type::Infer);
+        let mut target_type = final_type.clone();
+
+        if store_var != 0 {
+            for _ in 0..store_var {
+                target_type = match target_type {
+                    Type::Set(boxed) => *boxed,
+                    Type::Iter(boxed) => *boxed,
+                    _ => Type::Infer,
+                };
+            }
+        }
 
         match self.current_token {
             Token::Assign => {
                 self.advance_token();
                 let expr_type = self.parse_expression()?;
+
+                if !Self::types_match(&target_type, &expr_type) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in assignment");
+                }
 
                 if store_var != 0 {
                     self.code.push(Op::StoreIndex(store_var));
@@ -1375,10 +1569,9 @@ impl<'a> Compiler<'a> {
                     } else {
                         self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
-                    if let Some((_, _, var_type_ref)) = self.variables.get_mut(name) {
-                        if *var_type_ref == None || *var_type_ref == Some(Type::Infer) {
+                    if let Some((_, _, var_type_ref)) = self.variables.get_mut(name) 
+                        && (var_type_ref.is_none() || *var_type_ref == Some(Type::Infer)) {
                             *var_type_ref = Some(expr_type);
-                        }
                     }
                 }
                 self.code.push(Op::PushVoid);
@@ -1394,11 +1587,15 @@ impl<'a> Compiler<'a> {
                     _ => unreachable!(),
                 };
                 self.advance_token();
-                
+                let expr_type = self.parse_expression()?;              
+
+                if !Self::types_match(&target_type, &expr_type) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in assignment operator");
+                }
+
                 if store_var != 0 {
                     self.code.push(Op::DupTarget(store_var));
                     self.code.push(Op::LoadIndex(store_var));
-                    self.parse_expression()?;              
                     self.code.push(op);
 
                     self.code.push(Op::StoreIndex(store_var));
@@ -1413,7 +1610,6 @@ impl<'a> Compiler<'a> {
                     } else {
                         self.code.push(Op::LoadLocal(var_id, depth_delta));
                     }
-                    self.parse_expression()?;              
                     self.code.push(op);                    
 
                     if is_global {
@@ -1429,6 +1625,10 @@ impl<'a> Compiler<'a> {
                 let is_inc = self.current_token == Token::Inc;
                 let op = if is_inc { Op::Plus } else { Op::Sub };
                 self.advance_token();
+
+                if !Self::types_match(&target_type, &Type::Number) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Expected number for inc/dec operation");
+                }
 
                 if store_var != 0 {
                     self.code.push(Op::DupTarget(store_var));
@@ -1467,13 +1667,7 @@ impl<'a> Compiler<'a> {
             _ => {
                 if store_var != 0 {
                     self.code.push(Op::LoadIndex(store_var));
-                    for _ in 0..store_var {
-                        final_type = match final_type {
-                            Type::Set(boxed) => *boxed,
-                            Type::Iter(boxed) => *boxed,
-                            _ => Type::Infer,
-                        };
-                    }
+                    final_type = target_type;
                 } else {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
@@ -1510,7 +1704,14 @@ impl<'a> Compiler<'a> {
         let jump_index = self.code.len();
         self.loop_contexts.push((jump_index, Vec::new()));
 
-        self.parse_expression()?;
+        let start_change_idx = self.scope_changes.len();
+        let old_next_slot = self.next_slot;
+
+        let cond_type = self.parse_expression()?;
+        if !Self::types_match(&cond_type, &Type::Bool) {
+            return self.throw_error(CompilerError::UnexpectedArg, "Expected bool in while condition");
+        }
+
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
         self.parse_block()?;
@@ -1518,6 +1719,17 @@ impl<'a> Compiler<'a> {
         self.code.push(Op::Jump(jump_index));
 
         self.patch_plug(plug);
+
+        while self.scope_changes.len() > start_change_idx {
+            if let Some((name, old_val)) = self.scope_changes.pop() {
+                if let Some(prev_slot) = old_val.map(|(x, y)| (x, y, None)) {
+                    self.variables.insert(name, prev_slot);
+                } else {
+                    self.variables.remove(name);
+                }
+            }
+        }
+        self.next_slot = old_next_slot;
         
         let (_, break_plugs) = self.loop_contexts.pop().unwrap();
         for b in break_plugs {
@@ -1536,13 +1748,21 @@ impl<'a> Compiler<'a> {
         while self.next_if(Token::Else) {
             if self.next_if(Token::If) {
                 let branch_type = self.parse_if_branch()?;
-                if final_type == Type::Infer || final_type == Type::Void { final_type = branch_type; }
+                if final_type == Type::Infer || final_type == Type::Void { 
+                    final_type = branch_type; 
+                } else if branch_type != Type::Infer && branch_type != Type::Void && !Self::types_match(&final_type, &branch_type) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in if branches");
+                }
                 vec.push(self.add_plug(Op::Jump(0)))
             }
             else {
                 has_else = true; 
                 let branch_type = self.parse_block()?;
-                if final_type == Type::Infer || final_type == Type::Void { final_type = branch_type; }
+                if final_type == Type::Infer || final_type == Type::Void { 
+                    final_type = branch_type; 
+                } else if branch_type != Type::Infer && branch_type != Type::Void && !Self::types_match(&final_type, &branch_type) {
+                    return self.throw_error(CompilerError::UnexpectedArg, "Type mismatch in if branches");
+                }
             }
         }
 
@@ -1566,7 +1786,11 @@ impl<'a> Compiler<'a> {
         let start_change_idx = self.scope_changes.len();
         let old_next_slot = self.next_slot;
 
-        self.parse_expression()?; 
+        let cond_type = self.parse_expression()?; 
+        if !Self::types_match(&cond_type, &Type::Bool) {
+            return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected bool in if condition: {:?}", cond_type));
+        }
+
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
         let branch_type = self.parse_block()?;
@@ -1653,29 +1877,4 @@ impl<'a> Compiler<'a> {
         };
         Ok(code)
     }
-
-    /*pub fn func_return_type(func_code: usize) -> Type {
-        match func_code {
-            1 => Type::Number,
-            2 => Type::Bool,
-            3 | 6 => Type::Result(Box::new((Type::Str, Type::Str))),
-            4 => Type::Str,
-            5 => Type::Iter(Box::new(Type::Infer)),
-            7 | 8 => Type::Result(Box::new((Type::File, Type::Str))),
-            9 | 10 | 11 => Type::Bool,
-            12 => Type::Void,
-            13 => Type::Str,
-            14 => Type::Result(Box::new((Type::Number, Type::Str))),
-            15 => Type::Iter(Box::new(Type::Number)),
-            16 | 17 | 18 => Type::Iter(Box::new(Type::Str)),
-            19 => Type::Cat(Box::new(Type::Infer)),
-            20 => Type::Set(Box::new(Type::Infer)),
-            21 => Type::Bool,
-            22 | 23 => Type::Str,
-            24 | 25 | 26 | 27 => Type::Result(Box::new((Type::Void, Type::Str))),
-            29 => Type::Void,
-            28 | 30 | 31 => Type::Set(Box::new(Type::Infer)),
-            _ => Type::Infer,
-        }
-    }*/
 }
