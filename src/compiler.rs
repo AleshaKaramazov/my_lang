@@ -107,8 +107,14 @@ impl<'a> Compiler<'a> {
         
         self.expect(Token::In)?;
         
-        self.parse_expression()?;     
+        let iter_type = self.parse_expression()?;     
         self.code.push(Op::MakeIter); 
+        
+        let elem_type = match iter_type {
+            Type::Iter(boxed) => *boxed,
+            Type::Set(boxed) => *boxed,
+            _ => Type::Infer,
+        };
         
         let loop_start = self.code.len();
         let exit_jump = self.add_plug(Op::IterNext(0)); 
@@ -122,7 +128,7 @@ impl<'a> Compiler<'a> {
             for name in loop_vars.iter().rev() {
                 let var_id = self.next_slot;
                 self.next_slot += 1;
-                let old_val = self.variables.insert(name, (var_id, self.scope_depth, None));
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(Type::Infer)));
                 old_vals.push((*name, old_val));
 
                 if self.scope_depth == 0 {
@@ -135,7 +141,7 @@ impl<'a> Compiler<'a> {
             let name = loop_vars[0];
             let var_id = self.next_slot;
             self.next_slot += 1;
-            let old_val = self.variables.insert(name, (var_id, self.scope_depth, None));
+            let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(elem_type)));
             old_vals.push((name, old_val));
 
             if self.scope_depth == 0 {
@@ -183,15 +189,16 @@ impl<'a> Compiler<'a> {
     }
 
     #[inline(always)]
-    fn parse_expression(&mut self) -> Result<(), CompilerError> {
+    fn parse_expression(&mut self) -> Result<Type, CompilerError> {
         self.parse_range()
     }
 
     #[inline(always)]
-    fn parse_range(&mut self) -> Result<(), CompilerError> {
-        self.parse_logical_or()?;
+    fn parse_range(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_logical_or()?;
         
         if self.current_token == Token::DotDot {
+            tp = Type::Iter(Box::new(Type::Number));
             self.advance_token();
             let incl = self.next_if(Token::Assign);
             if self.current_token == Token::RBracket {
@@ -201,13 +208,14 @@ impl<'a> Compiler<'a> {
             }
             self.code.push(Op::MakeRange(incl));
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_logical_or(&mut self) -> Result<(), CompilerError> {
-        self.parse_logical_and()?;
+    fn parse_logical_or(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_logical_and()?;
 
         while self.current_token == Token::Or {
+            tp = Type::Bool;
             self.advance_token();
 
             let jump_true_1 = self.add_plug(Op::JumpIfTrue(0));
@@ -224,10 +232,10 @@ impl<'a> Compiler<'a> {
 
             self.patch_plug(jump_end);
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_logical_and(&mut self) -> Result<(), CompilerError> {
+    fn parse_logical_and(&mut self) -> Result<Type, CompilerError> {
         self.parse_equality()?; 
 
         while self.current_token == Token::LogicalAnd { 
@@ -248,41 +256,46 @@ impl<'a> Compiler<'a> {
 
             self.patch_plug(jump_end);
         }
-        Ok(())
+        Ok(Type::Bool)
     }
 
-    fn parse_equality(&mut self) -> Result<(), CompilerError> {
-        self.parse_relational()?;
+    fn parse_equality(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_relational()?;
 
         while self.current_token == Token::Equal || self.current_token == Token::NotEqual { 
+            tp = Type::Bool;
             let op = if self.current_token == Token::Equal {Op::Equal} else {Op::NotEqual};
             self.advance_token();
             self.parse_relational()?;
             self.code.push(op);
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_relational(&mut self) -> Result<(), CompilerError> {
-        self.parse_arifm_or()?;
+    fn parse_relational(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_arifm_or()?;
         loop {
             match self.current_token {
                 Token::Greater => { 
+                    tp = Type::Bool;
                     self.advance_token();
                     self.parse_arifm_or()?;
                     self.code.push(Op::Greater);
                 }
                 Token::Less => { 
+                    tp = Type::Bool;
                     self.advance_token();
                     self.parse_arifm_or()?;
                     self.code.push(Op::Less);
                 }
                 Token::GreaterOrEqual => { 
+                    tp = Type::Bool;
                     self.advance_token();
                     self.parse_arifm_or()?;
                     self.code.push(Op::GreaterEq);
                 }
                 Token::LessOrEqual => { 
+                    tp = Type::Bool;
                     self.advance_token();
                     self.parse_arifm_or()?;
                     self.code.push(Op::LessEq);
@@ -290,35 +303,43 @@ impl<'a> Compiler<'a> {
                 _ => break,
             }
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_arifm_or(&mut self) -> Result<(), CompilerError> {
-        self.parse_arifm_and()?;
+    fn parse_arifm_or(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_arifm_and()?;
         while self.current_token == Token::ArifmOr {
+            tp = Type::Number;
             self.advance_token();
             self.parse_arifm_and()?;
             self.code.push(Op::ArifmOr);
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_arifm_and(&mut self) -> Result<(), CompilerError> {
-        self.parse_term()?;
+    fn parse_arifm_and(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_term()?;
         while self.current_token == Token::ArifmAnd {
+            tp = Type::Number;
             self.advance_token();
             self.parse_term()?;
             self.code.push(Op::ArifmAnd);
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_term(&mut self) -> Result<(), CompilerError> {
-        self.parse_factor()?;
+    fn parse_term(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_factor()?;
         while self.current_token == Token::Plus || self.current_token == Token::Minus {
             let is_plus = self.current_token == Token::Plus;
             self.advance_token(); 
-            self.parse_factor()?; 
+            let oth_tp = self.parse_factor()?;  
+
+            tp = match (oth_tp, tp) {
+                (Type::Str, _) | (Type::Char, _) | (_, Type::Str) | (_, Type::Char) => Type::Str,
+                (Type::Float, _) | (_, Type::Float) => Type::Float,
+                _ => Type::Number,
+            };
 
             if is_plus {
                 self.code.push(Op::Plus);
@@ -326,16 +347,22 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::Sub);
             }
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_factor(&mut self) -> Result<(), CompilerError> {
-        self.parse_power()?;
+    fn parse_factor(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_power()?;
 
         while self.current_token == Token::Mult || self.current_token == Token::Div {
             let is_star = self.current_token == Token::Mult;
             self.advance_token();
-            self.parse_power()?;
+            let oth_tp = self.parse_power()?;
+
+            tp = match (oth_tp, tp) {
+                (Type::Str, _) | (Type::Char, _) | (_, Type::Str) | (_, Type::Char) => Type::Str,
+                (Type::Float, _) | (_, Type::Float) => Type::Float,
+                _ => Type::Number,
+            };
 
             if is_star {
                 self.code.push(Op::Mult);
@@ -343,27 +370,29 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::Div);
             }
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_power(&mut self) -> Result<(), CompilerError> {
-        self.parse_unary()?;
+    fn parse_power(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = self.parse_unary()?;
 
         if self.current_token == Token::Pow || self.current_token == Token::Mod {
+            tp = Type::Number;
             let oper = if self.current_token == Token::Pow {Op::Pow} else {Op::Mod};
             self.advance_token();
             self.parse_power()?;
             self.code.push(oper);
         }
-        Ok(())
+        Ok(tp)
     }
 
-    fn parse_unary(&mut self) -> Result<(), CompilerError> {
+    fn parse_unary(&mut self) -> Result<Type, CompilerError> {
         match self.current_token {
             Token::Not => {
                 self.advance_token();
                 self.parse_unary()?; 
                 self.code.push(Op::Not);
+                Ok(Type::Bool) 
             }
             Token::Inc | Token::Dec => {
                 let is_inc = self.current_token == Token::Inc;
@@ -442,23 +471,45 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
+                Ok(Type::Number) 
             }
             _ => {
-                self.parse_primary()?;
+                self.parse_primary()
             }
         }
-        Ok(())
     }
 
    
-    fn parse_primary(&mut self) -> Result<(), CompilerError> {
-        match self.current_token {
+    fn parse_primary(&mut self) -> Result<Type, CompilerError> {
+        let mut tp = match self.current_token {
             Token::String(s) => {
                 self.advance_token();
                 self.code.push(Op::PushStr(s));
+                Type::Str
+            }
+            Token::Char(c) => {
+                self.advance_token();
+                self.code.push(Op::PushChar(c));
+                Type::Char
+            }
+            Token::Number(n) => {
+                self.advance_token();
+                self.code.push(Op::PushNumber(n));
+                Type::Number
+            }
+            Token::Float(f) => {
+                self.advance_token();
+                self.code.push(Op::PushFLoat(f));
+                Type::Float
+            }
+            Token::Bool(b) => {
+                self.advance_token();
+                self.code.push(Op::PushBool(b));
+                Type::Bool
             }
             Token::ArifmOr | Token::Or => {
                 self.parse_fn(None, None)?;
+                Type::Infer
             }
             Token::DotDot => {
                 self.advance_token();
@@ -470,6 +521,7 @@ impl<'a> Compiler<'a> {
                     self.parse_expression()?;
                 }
                 self.code.push(Op::MakeRange(incl));
+                Type::Iter(Box::new(Type::Number))
             }
             Token::Ok | Token::Some | Token::Err => {
                 let oper = match self.current_token {
@@ -478,11 +530,20 @@ impl<'a> Compiler<'a> {
                     Token::Some => Op::MakeSome,
                     _ => unreachable!()
                 };
+                let is_some = self.current_token == Token::Some;
+                let is_ok = self.current_token == Token::Ok;
                 self.advance_token();
                 self.expect(Token::LParen)?;
-                self.parse_expression()?;
+                let inner_tp = self.parse_expression()?;
                 self.code.push(oper);
                 self.expect(Token::RParen)?;
+                if is_some {
+                    Type::Cat(Box::new(inner_tp))
+                } else if is_ok {
+                    Type::Result(Box::new((inner_tp, Type::Infer)))
+                } else {
+                    Type::Result(Box::new((Type::Infer, inner_tp)))
+                }
             }
             Token::Let => {
                 self.advance_token();
@@ -495,10 +556,9 @@ impl<'a> Compiler<'a> {
                         let var_id = self.next_slot;
                         self.next_slot += 1;
 
-                        let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
+                        let expr_type = self.parse_equality()?;
+                        let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(expr_type))).map(|(one, two, _)| (one, two));
                         self.scope_changes.push((name, old_val));
-
-                        self.parse_equality()?;
 
                         if self.scope_depth == 0 {
                             self.code.push(Op::StoreGlobal(var_id));
@@ -512,10 +572,11 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::PushBool(false));
                         self.patch_plug(end_jump);
 
-                        return Ok(()) 
+                        return Ok(Type::Void) 
                     } 
                     _ => return Err(CompilerError::UnexpectedArg),
                 };
+                let token_kind = self.current_token.clone();
                 self.advance_token();
                 self.expect(Token::LParen)?;
                 let name = match self.current_token {
@@ -526,7 +587,7 @@ impl<'a> Compiler<'a> {
                 self.expect(Token::RParen)?;
                 self.expect(Token::Assign)?;
 
-                self.parse_equality()?;
+                let expr_type = self.parse_equality()?;
 
                 let fail_jump = self.code.len();
                 if is_right {
@@ -535,10 +596,20 @@ impl<'a> Compiler<'a> {
                     self.code.push(Op::SafeUnwL(0));
                 }
 
+                let inner_type = match &expr_type {
+                    Type::Result(boxed) => {
+                        if token_kind == Token::Ok { boxed.0.clone() } else { boxed.1.clone() }
+                    }
+                    Type::Cat(boxed) => {
+                        if token_kind == Token::Some { *boxed.clone() } else { Type::Infer }
+                    }
+                    _ => Type::Infer,
+                };
+
                 let var_id = self.next_slot;
                 self.next_slot += 1;
 
-                let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(one, two, _)| (one, two));
+                let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type))).map(|(one, two, _)| (one, two));
                 self.scope_changes.push((name, old_val));
 
                 if self.scope_depth == 0 {
@@ -559,45 +630,40 @@ impl<'a> Compiler<'a> {
 
                 self.code.push(Op::PushBool(false));
                 self.patch_plug(end_jump);
+                Type::Void
             }
             Token::None => {
                 self.advance_token();
-                self.code.push(Op::None)
-            }
-            Token::Char(c) => {
-                self.advance_token();
-                self.code.push(Op::PushChar(c));
+                self.code.push(Op::None);
+                Type::Cat(Box::new(Type::Infer))
             }
             Token::LBracket => {
                 self.advance_token();
                 let mut arg_count = 0;
+                let mut elem_type = Type::Infer;
                 while !self.next_if(Token::RBracket) {
                     arg_count += 1;
-                    self.parse_expression()?;
+                    let tp = self.parse_expression()?;
+                    if elem_type == Type::Infer {
+                        elem_type = tp;
+                    }
                     self.next_if(Token::Comma);
                 }
-                self.code.push(Op::MakeSet(arg_count))
-            }
-            Token::Number(n) => {
-                self.advance_token();
-                self.code.push(Op::PushNumber(n));
-            }
-            Token::Float(f) => {
-                self.advance_token();
-                self.code.push(Op::PushFLoat(f));
-            }
-            Token::Bool(b) => {
-                self.advance_token();
-                self.code.push(Op::PushBool(b));
-            }
+                self.code.push(Op::MakeSet(arg_count));
+                Type::Set(Box::new(elem_type))
+            } 
             Token::If => {
-                self.parse_if(true)?;
+                self.parse_if(true)?
             }
             Token::Match => {
-                self.parse_match()?;
+                self.parse_match()?
             }
-            Token::Ident(name) => self.parse_ident(name)?,
-            Token::Begin => self.parse_block()?,
+            Token::Ident(name) => {
+                self.parse_ident(name)?
+            }
+            Token::Begin => {
+                self.parse_block()?
+            }
             Token::LParen => {
                 self.advance_token();
                 if self.next_if(Token::RParen) {
@@ -621,9 +687,10 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::MakeTuple(count));
                     }
                 }
+                Type::Infer
             }
             _ => return Err(CompilerError::UnexpectedArg),
-        }
+        };
         loop {
             if self.next_if(Token::LBracket) {
                 self.parse_expression()?;
@@ -635,6 +702,13 @@ impl<'a> Compiler<'a> {
                     self.expect(Token::RBracket)?;
                 }
                 self.code.push(Op::LoadIndex(arg_count));
+                for _ in 0..arg_count {
+                    tp = match tp {
+                        Type::Set(boxed) => *boxed,
+                        Type::Iter(boxed) => *boxed,
+                        _ => Type::Infer,
+                    };
+                }
             } else if self.next_if(Token::Dot) {
                 let method_name = if let Token::Ident(n) = self.current_token {
                     self.advance_token();
@@ -644,13 +718,19 @@ impl<'a> Compiler<'a> {
                 };
                 self.expect(Token::LParen)?;
                 self.parse_func_call(method_name, true)?;
+                tp = Self::func_return_type(method_name);
             } else if self.next_if(Token::Query) {
                 self.code.push(Op::Try);
+                tp = match tp {
+                    Type::Result(boxed) => boxed.0.clone(),
+                    Type::Cat(boxed) => *boxed,
+                    _ => Type::Infer,
+                };
             } else {
                 break;
             }
         }
-        Ok(())
+        Ok(tp)
     }
 
     fn parse_type(&mut self) -> Result<Type, CompilerError> {
@@ -730,21 +810,18 @@ impl<'a> Compiler<'a> {
             return Ok(());
         } 
 
-        self.parse_expression()?; 
+        let expr_type = self.parse_expression()?; 
         self.next_if(Token::Semicolon);
 
         if is_tuple {
             self.code.push(Op::UnpackTuple(names.len()));
             
             for (i, name) in names.into_iter().enumerate().rev() {
-                let tp = &types[i];
-                if let Some(t) = tp {
-                    self.code.push(Op::ExpectType(t.clone()));
-                }
+                let tp = types[i].clone().unwrap_or(Type::Infer);
 
                 let var_id = self.next_slot;
                 self.next_slot += 1;
-                let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(a, b, _)| (a, b));
+                let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp))).map(|(a, b, _)| (a, b));
                 self.scope_changes.push((name, old_value));
 
                 if self.scope_depth == 0 {
@@ -755,13 +832,11 @@ impl<'a> Compiler<'a> {
             }
         } else {
             let name = names[0];
-            let tp = &types[0];
-            if let Some(t) = tp {
-                self.code.push(Op::ExpectType(t.clone()));
-            }
+            let tp = types[0].clone().unwrap_or(expr_type);
+            
             let var_id = self.next_slot;
             self.next_slot += 1;
-            let old_value = self.variables.insert(name, (var_id, self.scope_depth, tp.clone())).map(|(a, b, _)| (a, b));
+            let old_value = self.variables.insert(name, (var_id, self.scope_depth, Some(tp))).map(|(a, b, _)| (a, b));
             self.scope_changes.push((name, old_value));
 
             if self.scope_depth == 0 {
@@ -829,23 +904,25 @@ impl<'a> Compiler<'a> {
             self.advance_token();
         }
 
+        let mut explicit_ret = true;
         let exp = if let Some(tp) = exp {
             tp
-        } else {
-            self.expect(Token::Arrow)?;
+        } else if self.next_if(Token::Arrow) {
             self.parse_type()?
+        } else {
+            explicit_ret = false;
+            Type::Infer
         };
 
         for (slot, ty) in arg_types {
-            if let Some(t) = ty {
+            if let Some(_) = ty {
                 self.code.push(Op::LoadLocal(slot, 0));
-                self.code.push(Op::ExpectType(t));
                 self.code.push(Op::Pop);
             }
         }
 
-        self.parse_block()?;        
-        self.code.push(Op::ExpectType(exp));
+        let block_type = self.parse_block()?;        
+        let final_return_type = if explicit_ret { exp } else { block_type };
         self.code.push(Op::Return);
 
         for (pos, old_val) in old_vals.iter().enumerate() {
@@ -879,10 +956,15 @@ impl<'a> Compiler<'a> {
                 self.code.push(Op::StoreLocal(id, 0));
             }
         }
+        if let Some(name) = func_name {
+            if let Some((_, _, var_type)) = self.variables.get_mut(name) {
+                *var_type = Some(final_return_type);
+            }
+        }
         Ok(())
     }
 
-    pub fn parse_block(&mut self) -> Result<(), CompilerError> {
+    pub fn parse_block(&mut self) -> Result<Type, CompilerError> {
         self.next_if(Token::FatArrow);
         let was_open = self.next_if(Token::Begin);
 
@@ -890,6 +972,7 @@ impl<'a> Compiler<'a> {
         let start_change_idx = self.scope_changes.len();
 
         let mut has_expression_value = false;
+        let mut block_type = Type::Void;
 
         while self.current_token != Token::End && self.current_token != Token::Eof {
             if has_expression_value {
@@ -898,27 +981,30 @@ impl<'a> Compiler<'a> {
             }
             match self.current_token {
                 Token::If => {
-                    self.parse_if(false)?;
+                    block_type = self.parse_if(false)?;
                     has_expression_value = true;
                 }
                 Token::For => {
                     self.parse_for()?;
+                    block_type = Type::Void;
                     has_expression_value = false;
                 }
                 Token::Match => {
-                    self.parse_match()?;
+                    block_type = self.parse_match()?;
                     has_expression_value = true;
                 }
                 Token::Loop => {
                     self.parse_loop()?;
+                    block_type = Type::Void;
                     has_expression_value = false;
                 }
                 Token::While => {
                     self.parse_while()?;
+                    block_type = Type::Void;
                     has_expression_value = false;
                 }
                 Token::Begin => {
-                    self.parse_block()?;
+                    block_type = self.parse_block()?;
                     self.code.push(Op::Pop);
                     has_expression_value = true;
                 }
@@ -931,6 +1017,7 @@ impl<'a> Compiler<'a> {
                         return Err(CompilerError::UnexpectedArg);
                     }
                     self.next_if(Token::Semicolon);
+                    block_type = Type::Void;
                     has_expression_value = true; 
                 }
                 Token::Continue => {
@@ -941,20 +1028,22 @@ impl<'a> Compiler<'a> {
                         return Err(CompilerError::UnexpectedArg);
                     }
                     self.next_if(Token::Semicolon);
+                    block_type = Type::Void;
                     has_expression_value = true; 
                 }
                 Token::Return => {
                     self.advance_token();
-                    self.parse_expression()?;
+                    block_type = self.parse_expression()?;
                     self.next_if(Token::Semicolon);
                     self.code.push(Op::Return);
                 }
                 _ => {
-                    self.parse_expression()?;
+                    block_type = self.parse_expression()?;
                     
                     if self.next_if(Token::Semicolon) {
                         self.code.push(Op::Pop);
                         has_expression_value = false;
+                        block_type = Type::Void;
                     } else {
                         if matches!(self.current_token, Token::End | Token::Eof) || !was_open {
                             has_expression_value = true;
@@ -962,6 +1051,7 @@ impl<'a> Compiler<'a> {
                         } else {
                             self.code.push(Op::Pop);
                             has_expression_value = false;
+                            block_type = Type::Void;
                         }
                     }
                 }
@@ -974,6 +1064,7 @@ impl<'a> Compiler<'a> {
 
         if !has_expression_value {
             self.code.push(Op::PushVoid);
+            block_type = Type::Void;
         }
 
         while self.scope_changes.len() > start_change_idx {
@@ -988,19 +1079,21 @@ impl<'a> Compiler<'a> {
 
         self.next_slot = old_next_slot;
 
-        Ok(())
+        Ok(block_type)
     }
 
-    pub fn parse_match(&mut self) -> Result<(), CompilerError> {
+    pub fn parse_match(&mut self) -> Result<Type, CompilerError> {
         self.advance_token();
-        if self.next_if(Token::UnderScope) {
+        let match_type = if self.next_if(Token::UnderScope) {
             self.code.push(Op::PushVoid);
+            Type::Void
         } else {
-            self.parse_expression()?;
-        }
+            self.parse_expression()?
+        };
         self.expect(Token::Begin)?;
 
         let mut end_jumps = Vec::new();
+        let mut final_type = Type::Infer;
 
         while self.current_token != Token::End && self.current_token != Token::Eof {
             let mut next_arm_jumps = Vec::new();
@@ -1014,7 +1107,7 @@ impl<'a> Compiler<'a> {
                     let var_id = self.next_slot;
                     self.next_slot += 1;
 
-                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(x, y, _)| (x, y));
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(match_type.clone()))).map(|(x, y, _)| (x, y));
                     self.scope_changes.push((name, old_val));
 
                     if self.scope_depth == 0 {
@@ -1036,6 +1129,7 @@ impl<'a> Compiler<'a> {
                 }
                 Token::Ok | Token::Some | Token::Err => {
                     let is_right = matches!(self.current_token, Token::Ok | Token::Some);
+                    let token_kind = self.current_token.clone();
                     self.advance_token();
                     self.expect(Token::LParen)?;
                     
@@ -1056,10 +1150,20 @@ impl<'a> Compiler<'a> {
                     }
                     next_arm_jumps.push(fail_jump);
 
+                    let inner_type = match &match_type {
+                        Type::Result(boxed) => {
+                            if token_kind == Token::Ok { boxed.0.clone() } else { boxed.1.clone() }
+                        }
+                        Type::Cat(boxed) => {
+                            if token_kind == Token::Some { *boxed.clone() } else { Type::Infer }
+                        }
+                        _ => Type::Infer,
+                    };
+
                     let var_id = self.next_slot;
                     self.next_slot += 1;
 
-                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, None)).map(|(x, y, _)| (x, y));
+                    let old_val = self.variables.insert(name, (var_id, self.scope_depth, Some(inner_type))).map(|(x, y, _)| (x, y));
                     self.scope_changes.push((name, old_val));
 
                     if self.scope_depth == 0 {
@@ -1127,7 +1231,12 @@ impl<'a> Compiler<'a> {
             self.expect(Token::FatArrow)?;
 
             self.code.push(Op::Pop);
-            self.parse_block()?;
+            let arm_type = self.parse_block()?;
+            
+            if final_type == Type::Infer || final_type == Type::Void {
+                final_type = arm_type;
+            }
+
             self.next_if(Token::Comma);
 
             end_jumps.push(self.add_plug(Op::Jump(0)));
@@ -1164,7 +1273,11 @@ impl<'a> Compiler<'a> {
             self.patch_plug(jump);
         }
 
-        Ok(())
+        if final_type == Type::Infer {
+            final_type = Type::Void;
+        }
+
+        Ok(final_type)
     }
 
     pub fn parse_func_call(&mut self, name: &'a str, first_arg: bool) -> Result<(), CompilerError> {
@@ -1199,17 +1312,23 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    pub fn parse_ident(&mut self, name: &'a str) -> Result<(), CompilerError> {
+    pub fn parse_ident(&mut self, name: &'a str) -> Result<Type, CompilerError> {
         self.advance_token(); 
         
         if self.next_if(Token::LParen) {
             self.parse_func_call(name, false)?;
-            return Ok(());
+            if let Some((_, _, var_type)) = self.variables.get(name) {
+                if let Some(tp) = var_type {
+                    return Ok(tp.clone());
+                }
+            }
+            return Ok(Self::func_return_type(name));
         }
 
         let is_known = self.variables.contains_key(name);
         if self.current_token == Token::Colon || !is_known && (self.current_token == Token::Comma || self.current_token == Token::Assign) {
-            return self.parse_let(name);
+            self.parse_let(name)?;
+            return Ok(Type::Void);
         }
 
         let (var_id, var_depth, var_type) = match self.variables.get(name){
@@ -1236,14 +1355,13 @@ impl<'a> Compiler<'a> {
             0
         };
 
+        let mut final_type = var_type.unwrap_or(Type::Infer);
+
         match self.current_token {
             Token::Assign => {
                 self.advance_token();
-                self.parse_expression()?;
+                let expr_type = self.parse_expression()?;
 
-                if let Some(ty) = var_type {
-                    self.code.push(Op::ExpectType(ty.clone()));
-                }
                 if store_var != 0 {
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {
@@ -1257,8 +1375,14 @@ impl<'a> Compiler<'a> {
                     } else {
                         self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
+                    if let Some((_, _, var_type_ref)) = self.variables.get_mut(name) {
+                        if *var_type_ref == None || *var_type_ref == Some(Type::Infer) {
+                            *var_type_ref = Some(expr_type);
+                        }
+                    }
                 }
                 self.code.push(Op::PushVoid);
+                final_type = Type::Void;
             }
             Token::AssignOper(id) => {
                 let op = match id {
@@ -1277,10 +1401,6 @@ impl<'a> Compiler<'a> {
                     self.parse_expression()?;              
                     self.code.push(op);
 
-                    if let Some(ref ty) = var_type {
-                        self.code.push(Op::ExpectType(ty.clone()));
-                    }
-
                     self.code.push(Op::StoreIndex(store_var));
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
@@ -1295,9 +1415,6 @@ impl<'a> Compiler<'a> {
                     }
                     self.parse_expression()?;              
                     self.code.push(op);                    
-                    if let Some(ref ty) = var_type {
-                        self.code.push(Op::ExpectType(ty.clone()));
-                    }
 
                     if is_global {
                         self.code.push(Op::StoreGlobal(var_id));
@@ -1306,6 +1423,7 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 self.code.push(Op::PushVoid);
+                final_type = Type::Void;
             }
             Token::Inc | Token::Dec => {
                 let is_inc = self.current_token == Token::Inc;
@@ -1344,10 +1462,18 @@ impl<'a> Compiler<'a> {
                         self.code.push(Op::StoreLocal(var_id, depth_delta));
                     }
                 }
+                final_type = Type::Void;
             }
             _ => {
                 if store_var != 0 {
                     self.code.push(Op::LoadIndex(store_var));
+                    for _ in 0..store_var {
+                        final_type = match final_type {
+                            Type::Set(boxed) => *boxed,
+                            Type::Iter(boxed) => *boxed,
+                            _ => Type::Infer,
+                        };
+                    }
                 } else {
                     if is_global {
                         self.code.push(Op::LoadGlobal(var_id));
@@ -1358,7 +1484,7 @@ impl<'a> Compiler<'a> {
             }
         }
         
-        Ok(())
+        Ok(final_type)
     }
 
     pub fn parse_loop(&mut self) -> Result<(), CompilerError> {
@@ -1401,20 +1527,22 @@ impl<'a> Compiler<'a> {
         Ok(()) 
     }
 
-    pub fn parse_if(&mut self, need_else: bool) -> Result<(), CompilerError> {
+    pub fn parse_if(&mut self, need_else: bool) -> Result<Type, CompilerError> {
         self.advance_token();
-        self.parse_if_branch()?;
+        let mut final_type = self.parse_if_branch()?;
         
         let mut has_else = false;
         let mut vec = vec![self.add_plug(Op::Jump(0))];
         while self.next_if(Token::Else) {
             if self.next_if(Token::If) {
-                self.parse_if_branch()?;
+                let branch_type = self.parse_if_branch()?;
+                if final_type == Type::Infer || final_type == Type::Void { final_type = branch_type; }
                 vec.push(self.add_plug(Op::Jump(0)))
             }
             else {
                 has_else = true; 
-                self.parse_block()?;
+                let branch_type = self.parse_block()?;
+                if final_type == Type::Infer || final_type == Type::Void { final_type = branch_type; }
             }
         }
 
@@ -1423,6 +1551,7 @@ impl<'a> Compiler<'a> {
                 return Err(CompilerError::UnexpectedArg)
             } else {
                 self.code.push(Op::PushVoid);
+                final_type = Type::Void;
             }
         }
 
@@ -1430,17 +1559,17 @@ impl<'a> Compiler<'a> {
             self.patch_plug(*i);
         }  
 
-        Ok(())
+        Ok(final_type)
     }
 
-    pub fn parse_if_branch(&mut self) -> Result<(), CompilerError> {
+    pub fn parse_if_branch(&mut self) -> Result<Type, CompilerError> {
         let start_change_idx = self.scope_changes.len();
         let old_next_slot = self.next_slot;
 
         self.parse_expression()?; 
         let plug = self.add_plug(Op::JumpIfFalse(0));
 
-        self.parse_block()?;
+        let branch_type = self.parse_block()?;
 
         while self.scope_changes.len() > start_change_idx {
             if let Some((name, old_val)) = self.scope_changes.pop() {
@@ -1454,12 +1583,37 @@ impl<'a> Compiler<'a> {
         self.next_slot = old_next_slot;
 
         self.code[plug] = Op::JumpIfFalse(self.code.len() + 1);
-        Ok(())
+        Ok(branch_type)
     }
 
     pub fn compile(mut self) -> Result<Vec<Op<'a>>, CompilerError> {
         self.parse_block()?;
         Ok(self.code)
+    }
+
+    pub fn func_return_type(func_name: &str) -> Type {
+        match func_name {
+            "len" => Type::Number,
+            "starts_with" => Type::Bool,
+            "readch" | "read" => Type::Result(Box::new((Type::Str, Type::Str))),
+            "format" => Type::Str,
+            "enumerate" => Type::Iter(Box::new(Type::Number)),
+            "create" | "truncate" | "open" => Type::Result(Box::new((Type::File, Type::Str))),
+            "is_ok" | "is_empty" | "is_some" => Type::Bool,
+            "push" => Type::Void,
+            "readln" => Type::Str,
+            "parse" => Type::Result(Box::new((Type::Number, Type::Str))),
+            "step" => Type::Iter(Box::new(Type::Number)),
+            "lines" | "split_whitespace" | "split" => Type::Iter(Box::new(Type::Str)),
+            "nth" => Type::Cat(Box::new(Type::Infer)),
+            "collect" => Type::Set(Box::new(Type::Infer)),
+            "contains" => Type::Bool,
+            "to_lower" | "to_upper" => Type::Str,
+            "write" | "writeln" | "print" | "println" => Type::Result(Box::new((Type::Void, Type::Str))),
+            "clear_console" => Type::Void,
+            "filter_map" | "map" | "filter" => Type::Set(Box::new(Type::Infer)),
+            _ => Type::Infer,
+        }
     }
 
     pub fn func_code(func_name: &'a str) -> Result<i64, CompilerError> {
@@ -1499,4 +1653,29 @@ impl<'a> Compiler<'a> {
         };
         Ok(code)
     }
+
+    /*pub fn func_return_type(func_code: usize) -> Type {
+        match func_code {
+            1 => Type::Number,
+            2 => Type::Bool,
+            3 | 6 => Type::Result(Box::new((Type::Str, Type::Str))),
+            4 => Type::Str,
+            5 => Type::Iter(Box::new(Type::Infer)),
+            7 | 8 => Type::Result(Box::new((Type::File, Type::Str))),
+            9 | 10 | 11 => Type::Bool,
+            12 => Type::Void,
+            13 => Type::Str,
+            14 => Type::Result(Box::new((Type::Number, Type::Str))),
+            15 => Type::Iter(Box::new(Type::Number)),
+            16 | 17 | 18 => Type::Iter(Box::new(Type::Str)),
+            19 => Type::Cat(Box::new(Type::Infer)),
+            20 => Type::Set(Box::new(Type::Infer)),
+            21 => Type::Bool,
+            22 | 23 => Type::Str,
+            24 | 25 | 26 | 27 => Type::Result(Box::new((Type::Void, Type::Str))),
+            29 => Type::Void,
+            28 | 30 | 31 => Type::Set(Box::new(Type::Infer)),
+            _ => Type::Infer,
+        }
+    }*/
 }

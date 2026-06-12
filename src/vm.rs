@@ -105,13 +105,6 @@ impl<'a> VM {
                     let val = self.tos.clone();
                     self.push(val);
                 }
-
-                Op::ExpectType(tp) => {
-                    if !self.tos.this_type(tp) {
-                        println!("Expected: {:?}, find: {}", tp, self.tos);
-                        return Err(VMError::UnExpectedType);
-                    }
-                }
                 Op::Try => {
                     let val = self.pop();
                     match val {

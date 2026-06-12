@@ -4,7 +4,8 @@ pub enum CompilerError {
     UnexpectedArg,
     UnfindedVar,
     ExpectedToken,
-    UnknownFunc
+    UnknownFunc,
+    UnExpectedType,
 }
 
 #[derive(Debug)]

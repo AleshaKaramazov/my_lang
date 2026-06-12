@@ -1,6 +1,4 @@
-use crate::types::Type;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Op<'a> {
     PushStr(&'a str),
     PushChar(char),
@@ -35,7 +33,6 @@ pub enum Op<'a> {
     Pow,
     Div,
     Mod,
-    ExpectType(Type),
     MakeSet(usize),
     MakeIter,
     IterNext(usize),
