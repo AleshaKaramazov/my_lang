@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::op::Op;
 use crate::consts;
 use crate::errors::VMError;
-use crate::value::{UnpackedValue, Value};
+use crate::value::Value;
 
 pub struct VM {
     pub stack: Vec<Value>,
@@ -26,9 +26,9 @@ const STACK_MAX: usize = 2048;
 impl<'a> VM {
     pub fn new() -> Self {
         Self {
-            stack: vec![Value::void(); STACK_MAX],
+            stack: vec![Value::Void; STACK_MAX],
             sp: 0,
-            frame: vec![Value::void(); 1024],
+            frame: vec![Value::Void; 1024],
             fp: 0,
             call_stack: Vec::with_capacity(1024),
             now_frame: 0,
@@ -48,7 +48,7 @@ impl<'a> VM {
         self.sp -= 1;
         unsafe {
             let ptr = self.stack.get_unchecked_mut(self.sp);
-            std::mem::replace(ptr, Value::void())
+            std::mem::replace(ptr, Value::Void)
         }
     }
 
@@ -85,17 +85,17 @@ impl<'a> VM {
             let op = unsafe { &*ip_ptr };
 
             match op {
-                Op::PushFLoat(f) => self.push(Value::from_float(*f)),
-                Op::PushStr(s) => self.push(Value::from_str(Rc::new(RefCell::new(s.to_string())))),
-                Op::PushChar(c) => self.push(Value::from_char(*c)),
-                Op::PushNumber(n) => self.push(Value::from_number(*n)),
-                Op::PushBool(b) => self.push(Value::from_bool(*b)),
-                Op::PushRefGlobal(idx) => self.push(Value::from_ref(*idx)),
+                Op::PushFLoat(f) => self.push(Value::Float(*f)),
+                Op::PushStr(s) => self.push(Value::Str(Rc::new(RefCell::new(s.to_string())))),
+                Op::PushChar(c) => self.push(Value::Char(*c)),
+                Op::PushNumber(n) => self.push(Value::Number(*n)),
+                Op::PushBool(b) => self.push(Value::Bool(*b)),
+                Op::PushRefGlobal(idx) => self.push(Value::Ref(*idx)),
                 Op::PushFn(id) => {
                     let env_idx = self.call_stack.len().saturating_sub(1);
-                    self.push(Value::from_fn(*id as u32, env_idx as u32));
+                    self.push(Value::Fn(*id as u32, env_idx as u32));
                 }
-                Op::PushVoid => self.push(Value::void()),
+                Op::PushVoid => self.push(Value::Void),
                 Op::Pop => {
                     self.pop();
                 }
@@ -105,11 +105,11 @@ impl<'a> VM {
                 }
                 Op::Try => {
                     let val = self.pop();
-                    match val.unpack() {
-                        UnpackedValue::Result(inner) => match &**inner {
+                    match val {
+                        Value::Result(inner) => match &*inner {
                             Ok(inner_val) => self.push(inner_val.clone()),
                             Err(err_val) => {
-                                let return_val = Value::from_result(Box::new(Err(err_val.clone())));
+                                let return_val = Value::Result(Box::new(Err(err_val.clone())));
                                 let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
                                 
                                 self.fp = self.now_frame;
@@ -125,12 +125,12 @@ impl<'a> VM {
                                 continue;
                             }
                         },
-                        UnpackedValue::Cat(inner) => match &*inner {
+                        Value::Cat(inner) => match &inner {
                             Some(inner_val) => {
                                 self.push(*inner_val.clone());
                             }
                             None => {
-                                let return_val = Value::from_cat(None);
+                                let return_val = Value::Cat(None);
                                 let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
                                 
                                 self.fp = self.now_frame;
@@ -178,11 +178,11 @@ impl<'a> VM {
                         Op::LessEq => *left <= right,
                         _ => unreachable!(),
                     };
-                    *left = Value::from_bool(result);
+                    *left = Value::Bool(result);
                 }
                 Op::UnpackTuple(count) => {
                     let val = self.pop();
-                    if let UnpackedValue::Tuple(vals) = val.unpack() {
+                    if let Value::Tuple(vals) = val {
                         let vals = vals.borrow();
                         if vals.len() != *count {
                             return Err(VMError::EmptyStack);
@@ -202,25 +202,25 @@ impl<'a> VM {
                 }
                 Op::MakeOk => {
                     let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
-                    let val = std::mem::replace(tos, Value::void());
-                    *tos = Value::from_result(Box::new(Ok(val)));
+                    let val = std::mem::replace(tos, Value::Void);
+                    *tos = Value::Result(Box::new(Ok(val)));
                 }
                 Op::MakeErr => {
                     let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
-                    let val = std::mem::replace(tos, Value::void());
-                    *tos = Value::from_result(Box::new(Err(val)));
+                    let val = std::mem::replace(tos, Value::Void);
+                    *tos = Value::Result(Box::new(Err(val)));
                 }
                 Op::MakeSome => {
                     let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
-                    let val = std::mem::replace(tos, Value::void());
-                    *tos = Value::from_cat(Some(Box::new(val)));
+                    let val = std::mem::replace(tos, Value::Void);
+                    *tos = Value::Cat(Some(Box::new(val)));
                 }
                 Op::Not => {
                     let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
-                    *tos = Value::from_bool(!tos.is_truthy());
+                    *tos = Value::Bool(!tos.is_truthy());
                 }
                 Op::None => {
-                    self.push(Value::from_cat(None));
+                    self.push(Value::Cat(None));
                 }
                 Op::MakeRange(incl) => {
                     let end = self.pop();
@@ -228,11 +228,9 @@ impl<'a> VM {
                     self.push(Value::make_range(start, end, *incl)?);
                 }
                 Op::MakeIter => {
-                    let vale = self.pop();
-                    let val = vale.unpack();
-                    
+                    let val = self.pop();
                     self.push(
-                        if matches!(val, UnpackedValue::Iter(_)) {vale} else {Value::from_iter(Box::new(vale.make_iter()?))}
+                        if matches!(val, Value::Iter(_)) {val} else {Value::Iter(Box::new(val.make_iter()?))}
                     );
                 }
                 Op::Jump(target) => {
@@ -255,8 +253,8 @@ impl<'a> VM {
                 }
                 Op::SafeUnwL(target) => {
                     let val = self.pop();
-                    match val.unpack() {
-                        UnpackedValue::Result(inner) => if let Err(inner_err) = &**inner {
+                    match val {
+                        Value::Result(inner) => if let Err(inner_err) = &*inner {
                             self.push(inner_err.clone());
                         } else {
                             ip_ptr = unsafe { base_ptr.add(*target) };
@@ -270,18 +268,15 @@ impl<'a> VM {
                 }
                 Op::SafeUnwR(target) => {
                     let val = self.pop();
-                    match val.unpack() {
-                        UnpackedValue::Result(inner) => if let Ok(inner_val) = &**inner {
+                    match val {
+                        Value::Result(inner) => if let Ok(inner_val) = &*inner {
                             self.push(inner_val.clone());
                         } else {
                             ip_ptr = unsafe { base_ptr.add(*target) };
                             continue;
                         }
-                        UnpackedValue::Cat(inner) => if let Some(inner_val) = &*inner {
+                        Value::Cat(Some(inner_val)) => {
                             self.push(*inner_val.clone());
-                        } else {
-                            ip_ptr = unsafe { base_ptr.add(*target) };
-                            continue;
                         }
                         _ => {
                             ip_ptr = unsafe { base_ptr.add(*target) };
@@ -306,9 +301,9 @@ impl<'a> VM {
                     
                     if count == 0 {
                         let val = if is_tuple {
-                            Value::from_tuple(Rc::new(RefCell::new(Vec::new())))
+                            Value::Tuple(Rc::new(RefCell::new(Vec::new())))
                         } else {
-                            Value::from_set(Rc::new(RefCell::new(Vec::new())))
+                            Value::Set(Rc::new(RefCell::new(Vec::new())))
                         };
                         self.push(val);
                     } else {
@@ -316,13 +311,13 @@ impl<'a> VM {
                         let mut vals = Vec::with_capacity(count);
                         
                         for i in 0..count {
-                            vals.push(std::mem::replace(&mut self.stack[start + i], Value::void()));
+                            vals.push(std::mem::replace(&mut self.stack[start + i], Value::Void));
                         }
                         
                         let container = if is_tuple {
-                            Value::from_tuple(Rc::new(RefCell::new(vals)))
+                            Value::Tuple(Rc::new(RefCell::new(vals)))
                         } else {
-                            Value::from_set(Rc::new(RefCell::new(vals)))
+                            Value::Set(Rc::new(RefCell::new(vals)))
                         };
                         
                         self.stack[start] = container;
@@ -345,11 +340,11 @@ impl<'a> VM {
                     if count > 1 {
                         let start = self.sp - count;
                         
-                        let mut target = std::mem::replace(&mut self.stack[start - 1], Value::void());
+                        let mut target = std::mem::replace(&mut self.stack[start - 1], Value::Void);
                         target.set_index_deep(&self.stack[start..start + count], to_set)?;
                         
                         for i in 0..count {
-                            self.stack[start + i] = Value::void();
+                            self.stack[start + i] = Value::Void;
                         }
                         
                         self.stack[start - 1] = target;
@@ -367,11 +362,11 @@ impl<'a> VM {
                     let res = if count > 1 {
                         let start = self.sp - count;
                         
-                        let target = std::mem::replace(&mut self.stack[start - 1], Value::void());
+                        let target = std::mem::replace(&mut self.stack[start - 1], Value::Void);
                         let value = target.load_index_deep(&self.stack[start..start + count])?;
                         
                         for i in 0..count {
-                            self.stack[start + i] = Value::void();
+                            self.stack[start + i] = Value::Void;
                         }
                         
                         self.sp = start - 1; 
@@ -412,33 +407,33 @@ impl<'a> VM {
 
                 Op::PushRefLocal(idx, depth_delta) => {
                     let base = self.get_frame_base(*depth_delta);
-                    self.push(Value::from_ref(base + idx));
+                    self.push(Value::Ref(base + idx));
                 }
                 Op::CallFunc(n) => {
                     let func_val = self.pop();
                     
-                    match func_val.unpack() {
-                        UnpackedValue::Number(func) => {
+                    match func_val {
+                        Value::Number(func) => {
                             self.sp -= *n; 
             
                             self.run_func(func, *n, code)?; 
                             
                             if *n > 1 {
                                 for i in 0..(*n - 1) {
-                                    unsafe { *self.stack.get_unchecked_mut(self.sp + i) = Value::void(); }
+                                    unsafe { *self.stack.get_unchecked_mut(self.sp + i) = Value::Void; }
                                 }
                             }
                         }
-                        UnpackedValue::Fn(target_ip, env_frame) => { 
+                        Value::Fn(target_ip, env_frame) => { 
                             let next_frame_idx = self.fp;
 
                             if *n > 0 {
                                 let start = self.sp - *n;
 
                                 for i in start..self.sp {
-                                    let val = std::mem::replace(unsafe { self.stack.get_unchecked_mut(i) }, Value::void());
+                                    let val = std::mem::replace(unsafe { self.stack.get_unchecked_mut(i) }, Value::Void);
                                     
-                                    if self.fp >= self.frame.len() { self.frame.resize(self.fp + 1024, Value::void()); }
+                                    if self.fp >= self.frame.len() { self.frame.resize(self.fp + 1024, Value::Void); }
                                     unsafe { *self.frame.get_unchecked_mut(self.fp) = val; }
                                     self.fp += 1;
                                 }
