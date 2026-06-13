@@ -451,26 +451,30 @@ impl<'a> VM {
     }
    
     pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, env_frame: usize) -> Result<(), VMError> {
-        let (display, depth) = if env_frame < self.call_stack.len() {
-            let parent = &self.call_stack[env_frame];
-            let mut d = parent.display;
-            let current_depth = parent.depth;
-            d[current_depth] = parent.frame_idx;
-            (d, current_depth + 1)
+        let parent_frame = if env_frame < self.call_stack.len() {
+            env_frame
         } else {
-            ([0; crate::vm::MAX_DEPTH], 0)
+            usize::MAX
         };
+
+        let next_frame_idx = self.fp; 
 
         self.call_stack.push(CallFrame {
             return_ip: consts::STOP_FLAG, 
             old_frame: self.now_frame,
-            display,
-            depth,
-            frame_idx: self.frame.len()
+            parent_frame,
+            frame_idx: next_frame_idx 
         });
 
-        self.now_frame = self.frame.len();
-        self.frame.extend(args);
+        self.now_frame = next_frame_idx;
+
+        for val in args {
+            if self.fp >= self.frame.len() {
+                self.frame.resize(self.fp + 1024, Value::void());
+            }
+            unsafe { *self.frame.get_unchecked_mut(self.fp) = val; }
+            self.fp += 1;
+        }
 
         self.run(code, target_ip)?;
         Ok(())

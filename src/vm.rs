@@ -10,17 +10,15 @@ pub struct VM {
     pub tos: Value,
     pub sp: usize,
     pub frame: Vec<Value>,
+    pub fp: usize,
     pub call_stack: Vec<CallFrame>,
     pub now_frame: usize,
 }
 
-pub const MAX_DEPTH: usize = 16;
-
 pub struct CallFrame {
     pub return_ip: usize, 
     pub old_frame: usize, 
-    pub display: [usize; MAX_DEPTH], 
-    pub depth: usize,
+    pub parent_frame: usize, 
     pub frame_idx: usize,   
 }
 
@@ -32,8 +30,9 @@ impl<'a> VM {
             stack: vec![Value::void(); STACK_MAX],
             tos: Value::void(),
             sp: 0,
-            frame: Vec::with_capacity(32),
-            call_stack: Vec::with_capacity(32),
+            frame: vec![Value::void(); 1024],
+            fp: 0,
+            call_stack: Vec::with_capacity(1024),
             now_frame: 0,
         }
     }
@@ -70,8 +69,19 @@ impl<'a> VM {
         if depth_delta == 0 {
             return self.now_frame;
         }
-        let call_frame = self.call_stack.last().unwrap();
-        call_frame.display[call_frame.depth - depth_delta] 
+        let mut current_frame_idx = self.call_stack.last().unwrap().parent_frame;
+        for _ in 1..depth_delta {
+            if current_frame_idx == consts::STOP_FLAG {
+                return 0; 
+            }
+            current_frame_idx = self.call_stack[current_frame_idx].parent_frame;
+        }
+        
+        if current_frame_idx == consts::STOP_FLAG {
+            0
+        } else {
+            self.call_stack[current_frame_idx].frame_idx
+        }
     }
 
     #[inline(always)]
@@ -114,7 +124,7 @@ impl<'a> VM {
                                 let return_val = Value::from_result(Box::new(Err(err_val.clone())));
                                 let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
                                 
-                                self.frame.truncate(self.now_frame);
+                                self.fp = self.now_frame;
                                 self.now_frame = frame.old_frame;
                                 
                                 if frame.return_ip == consts::STOP_FLAG {
@@ -135,7 +145,7 @@ impl<'a> VM {
                                 let return_val = Value::from_cat(None);
                                 let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
                                 
-                                self.frame.truncate(self.now_frame);
+                                self.fp = self.now_frame;
                                 self.now_frame = frame.old_frame;
                                 
                                 if frame.return_ip == consts::STOP_FLAG {
@@ -227,7 +237,7 @@ impl<'a> VM {
                     }
                 }
                 Op::LoadGlobal(idx) => {
-                    if *idx >= self.frame.len() {
+                    if *idx >= self.fp {
                         return Err(VMError::EmptyStack);
                     }
                     self.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
@@ -457,15 +467,15 @@ impl<'a> VM {
                 }
                 Op::StoreGlobal(idx) => {
                     let value = self.pop();
-                    if *idx >= self.frame.len() {
-                        self.frame.resize(idx + 1, Value::void());
+                    if *idx >= self.fp {
+                        self.fp = idx + 1;
                     }
                     unsafe {*self.frame.get_unchecked_mut(*idx) = value}
                 }
                 Op::LoadLocal(idx, depth_delta) => {
                     let base = self.get_frame_base(*depth_delta);
                     let index = base + idx;
-                    if index >= self.frame.len() {
+                    if index >= self.fp {
                         return Err(VMError::EmptyStack);
                     }
                     self.push(unsafe { self.frame.get_unchecked(index) }.clone());
@@ -476,8 +486,8 @@ impl<'a> VM {
                     let base = self.get_frame_base(*depth_delta);
                     let index = base + idx;
 
-                    if index >= self.frame.len() {
-                        self.frame.resize(index + 1, Value::void());
+                    if index >= self.fp {
+                        self.fp = index + 1;
                     }
                     unsafe { *self.frame.get_unchecked_mut(index) = value; }
                 }
@@ -504,24 +514,22 @@ impl<'a> VM {
                             self.run_func(func, *n, code)?;
                         }
                         UnpackedValue::Fn(target_ip, env_frame) => { 
-                            let next_frame_idx = self.frame.len(); 
+                            let next_frame_idx = self.fp;
+
                             if *n > 0 {
                                 self.stack[self.sp - 1] = std::mem::replace(&mut self.tos, Value::void());
-                                self.sp -= n;
+                                let start = self.sp - *n;
                                 
-                                self.frame.reserve(*n);
-                                unsafe {
-                                    let src = self.stack.as_mut_ptr().add(self.sp);
-                                    let dst = self.frame.as_mut_ptr().add(self.frame.len());
+                                for i in start..self.sp {
+                                    let val = std::mem::replace(&mut self.stack[i], Value::void());
                                     
-                                    std::ptr::copy_nonoverlapping(src, dst, *n);
-                                    self.frame.set_len(self.frame.len() + *n);
+                                    if self.fp >= self.frame.len() { self.frame.resize(self.fp + 1024, Value::void()); }
                                     
-                                    for i in 0..*n {
-                                        std::ptr::write(src.add(i), Value::void());
-                                    }
+                                    unsafe { *self.frame.get_unchecked_mut(self.fp) = val; } 
+                                    self.fp += 1;
                                 }
-                                
+
+                                self.sp -= *n;
                                 if self.sp > 0 {
                                     self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::void());
                                 }
@@ -529,26 +537,16 @@ impl<'a> VM {
 
                             let current_idx = unsafe { ip_ptr.offset_from(base_ptr) as usize };
 
-                            let (display, depth) = if (env_frame as usize) < self.call_stack.len() {
-                                let parent = &self.call_stack[env_frame as usize];
-                                let mut d = parent.display; 
-                                let current_depth = parent.depth;
-                                
-                                if current_depth >= MAX_DEPTH {
-                                    return Err(VMError::FuncErr); 
-                                }
-                                
-                                d[current_depth] = parent.frame_idx;
-                                (d, current_depth + 1)
+                            let parent_frame = if (env_frame as usize) < self.call_stack.len() {
+                                env_frame as usize
                             } else {
-                                ([0; MAX_DEPTH], 0)
+                                usize::MAX
                             };
 
                             self.call_stack.push(CallFrame {
                                 return_ip: current_idx + 1, 
                                 old_frame: self.now_frame,
-                                display,
-                                depth, 
+                                parent_frame, 
                                 frame_idx: next_frame_idx,
                             });
 
@@ -556,7 +554,7 @@ impl<'a> VM {
                             
                             ip_ptr = unsafe { base_ptr.add(target_ip as usize) };
                             continue;
-                        }           
+                        }     
                         _ => return Err(VMError::FuncErr),
                     }
                 }
@@ -564,7 +562,7 @@ impl<'a> VM {
                     let return_val = self.pop();
                     let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
                     
-                    self.frame.truncate(self.now_frame);
+                    self.fp = self.now_frame;
                     self.now_frame = frame.old_frame;
                     
                     if frame.return_ip == consts::STOP_FLAG {
