@@ -48,7 +48,7 @@ impl Drop for Value {
 impl Clone for Value {
     fn clone(&self) -> Self {
         let tag = self.0 >> 48;
-        if tag < 0xFFF1 || tag > 0xFFFD || matches!(tag, 0xFFF1 | 0xFFF2 | 0xFFF4 | 0xFFF5 | 0xFFF6) {
+        if !(0xFFF1..=0xFFFD).contains(&tag) || matches!(tag, 0xFFF1 | 0xFFF2 | 0xFFF4 | 0xFFF5 | 0xFFF6) {
             return Value(self.0);
         }
         match self.unpack() {
@@ -673,7 +673,7 @@ impl Value {
         Value::from_str(Rc::new(RefCell::new(str.into())))
     }
     
-    pub fn set_index_deep(&mut self, index: Vec<Self>, to_set: Value) -> Result<(), VMError> {
+    pub fn set_index_deep(&mut self, index: &[Value], to_set: Value) -> Result<(), VMError> {
         let mut current_rc = match self.unpack() {
             UnpackedValue::Set(v) => (*v).clone(),
             _ => return Err(VMError::CantIndex),
@@ -695,7 +695,7 @@ impl Value {
         Ok(())
     }
 
-    pub fn load_index_deep(&self, index: Vec<Self>) -> Result<Value, VMError> {
+    pub fn load_index_deep(&self, index: &[Value]) -> Result<Value, VMError> {
         let mut current = self.clone();
 
         for i in index.iter() {

@@ -7,7 +7,6 @@ use crate::value::{UnpackedValue, Value};
 
 pub struct VM {
     pub stack: Vec<Value>,
-    pub tos: Value,
     pub sp: usize,
     pub frame: Vec<Value>,
     pub fp: usize,
@@ -28,7 +27,6 @@ impl<'a> VM {
     pub fn new() -> Self {
         Self {
             stack: vec![Value::void(); STACK_MAX],
-            tos: Value::void(),
             sp: 0,
             frame: vec![Value::void(); 1024],
             fp: 0,
@@ -39,29 +37,19 @@ impl<'a> VM {
 
     #[inline(always)]
     pub fn push(&mut self, val: Value) {
-        if self.sp > 0 {
-            unsafe {
-                *self.stack.get_unchecked_mut(self.sp - 1) = std::mem::replace(&mut self.tos, val);
-            }
-        } else {
-            self.tos = val;
+        unsafe {
+            *self.stack.get_unchecked_mut(self.sp) = val;
         }
         self.sp += 1;
     }
 
     #[inline(always)]
     pub fn pop(&mut self) -> Value {
-        if self.sp == 0 {
-            return Value::void(); 
-        }
         self.sp -= 1;
-        let popped = std::mem::replace(&mut self.tos, Value::void());
-        if self.sp > 0 {
-            unsafe {
-                self.tos = std::mem::replace(self.stack.get_unchecked_mut(self.sp - 1), Value::void());
-            }
+        unsafe {
+            let ptr = self.stack.get_unchecked_mut(self.sp);
+            std::mem::replace(ptr, Value::void())
         }
-        popped
     }
 
     #[inline(always)]
@@ -112,7 +100,7 @@ impl<'a> VM {
                     self.pop();
                 }
                 Op::Dup => {
-                    let val = self.tos.clone();
+                    let val = unsafe { self.stack.get_unchecked(self.sp - 1).clone()};
                     self.push(val);
                 }
                 Op::Try => {
@@ -162,9 +150,7 @@ impl<'a> VM {
                     }
                 }
                 Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
-                    let right = std::mem::replace(&mut self.tos, Value::void());
-                    self.sp -= 1; 
-                    
+                    let right = self.pop();
                     let left = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
                     
                     match *op {
@@ -178,49 +164,21 @@ impl<'a> VM {
                         Op::Mod => left.arifm_mod_assign(right)?,
                         _ => unreachable!(),
                     }
-                    
-                    self.tos = std::mem::replace(left, Value::void());
                 }
                 Op::Equal | Op::NotEqual | Op::Greater | Op::Less | Op::GreaterEq | Op::LessEq => {
-                    let right = std::mem::replace(&mut self.tos, Value::void());
-                    self.sp -= 1;
-                    let left = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
+                    let right = self.pop();
+                    let left = unsafe { self.stack.get_unchecked_mut(self.sp - 1)};
                     
                     let result = match *op {
-                        Op::Equal => left == right,
-                        Op::Greater => left > right,
-                        Op::NotEqual => left != right,
-                        Op::Less => left < right,
-                        Op::GreaterEq => left >= right,
-                        Op::LessEq => left <= right,
+                        Op::Equal => *left == right,
+                        Op::Greater => *left > right,
+                        Op::NotEqual => *left != right,
+                        Op::Less => *left < right,
+                        Op::GreaterEq => *left >= right,
+                        Op::LessEq => *left <= right,
                         _ => unreachable!(),
                     };
-                    self.tos = Value::from_bool(result);
-                }
-                Op::MakeTuple(count) => {
-                    let count = *count;
-                    if count == 0 {
-                        self.push(Value::from_tuple(Rc::new(RefCell::new(Vec::new()))));
-                    } else {
-                        let start = self.sp - count;
-                        let mut vals = Vec::with_capacity(count);
-                        
-                        unsafe {
-                            let src = self.stack.as_mut_ptr().add(start);
-                            let dst = vals.as_mut_ptr();
-                            
-                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
-                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::void()));
-                            vals.set_len(count);
-                            
-                            for i in 0..(count - 1) {
-                                std::ptr::write(src.add(i), Value::void());
-                            }
-                        }
-                        
-                        self.tos = Value::from_tuple(Rc::new(RefCell::new(vals)));
-                        self.sp = start + 1;
-                    }
+                    *left = Value::from_bool(result);
                 }
                 Op::UnpackTuple(count) => {
                     let val = self.pop();
@@ -243,16 +201,23 @@ impl<'a> VM {
                     self.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
                 }
                 Op::MakeOk => {
-                    let val = std::mem::replace(&mut self.tos, Value::void());
-                    self.tos = Value::from_result(Box::new(Ok(val)));
+                    let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                    let val = std::mem::replace(tos, Value::void());
+                    *tos = Value::from_result(Box::new(Ok(val)));
                 }
                 Op::MakeErr => {
-                    let val = std::mem::replace(&mut self.tos, Value::void());
-                    self.tos = Value::from_result(Box::new(Err(val)));
+                    let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                    let val = std::mem::replace(tos, Value::void());
+                    *tos = Value::from_result(Box::new(Err(val)));
                 }
                 Op::MakeSome => {
-                    let val = std::mem::replace(&mut self.tos, Value::void());
-                    self.tos = Value::from_cat(Some(Box::new(val)));
+                    let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                    let val = std::mem::replace(tos, Value::void());
+                    *tos = Value::from_cat(Some(Box::new(val)));
+                }
+                Op::Not => {
+                    let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                    *tos = Value::from_bool(!tos.is_truthy());
                 }
                 Op::None => {
                     self.push(Value::from_cat(None));
@@ -269,9 +234,6 @@ impl<'a> VM {
                     self.push(
                         if matches!(val, UnpackedValue::Iter(_)) {vale} else {Value::from_iter(Box::new(vale.make_iter()?))}
                     );
-                }
-                Op::Not => {
-                    self.tos = Value::from_bool(!self.tos.is_truthy());
                 }
                 Op::Jump(target) => {
                     ip_ptr = unsafe { base_ptr.add(*target) };
@@ -292,66 +254,44 @@ impl<'a> VM {
                     }
                 }
                 Op::SafeUnwL(target) => {
-                    let val = std::mem::replace(&mut self.tos, Value::void());
+                    let val = self.pop();
                     match val.unpack() {
-                        UnpackedValue::Result(inner) => if let Err(inner) = &**inner {
-                            self.tos = inner.clone()
-                        } 
-                        else {
-                            self.sp -= 1;
-                            if self.sp > 0 {
-                                self.tos = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
-                            }
+                        UnpackedValue::Result(inner) => if let Err(inner_err) = &**inner {
+                            self.push(inner_err.clone());
+                        } else {
                             ip_ptr = unsafe { base_ptr.add(*target) };
                             continue;
                         }
                         _ => {
-                            self.sp -= 1;
-                            if self.sp > 0 {
-                                self.tos = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
-                            }
                             ip_ptr = unsafe { base_ptr.add(*target) };
                             continue;
                         }
                     }
                 }
                 Op::SafeUnwR(target) => {
-                    let val = std::mem::replace(&mut self.tos, Value::void());
+                    let val = self.pop();
                     match val.unpack() {
                         UnpackedValue::Result(inner) => if let Ok(inner_val) = &**inner {
-                            self.tos = inner_val.clone(); 
+                            self.push(inner_val.clone());
                         } else {
-                            self.sp -= 1;
-                            if self.sp > 0 {
-                                self.tos = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
-                            }
                             ip_ptr = unsafe { base_ptr.add(*target) };
                             continue;
                         }
-                        UnpackedValue::Cat(inner) => {
-                            if let Some(inner_val) = &*inner {
-                                self.tos = *inner_val.clone()
-                            } else {
-                                self.sp -= 1;
-                                if self.sp > 0 {
-                                    self.tos = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
-                                }
-                                ip_ptr = unsafe { base_ptr.add(*target) };
-                                continue;
-                            }
+                        UnpackedValue::Cat(inner) => if let Some(inner_val) = &*inner {
+                            self.push(*inner_val.clone());
+                        } else {
+                            ip_ptr = unsafe { base_ptr.add(*target) };
+                            continue;
                         }
                         _ => {
-                            self.sp -= 1;
-                            if self.sp > 0 {
-                                self.tos = std::mem::replace(unsafe { self.stack.get_unchecked_mut(self.sp - 1) }, Value::void());
-                            }
                             ip_ptr = unsafe { base_ptr.add(*target) };
                             continue;
                         }
                     }
                 }
                 Op::IterNext(target) => {
-                    let val = self.tos.next()?;
+                    let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
+                    let val = tos.next()?;
                     match val {
                         Some(val) => self.push(val),
                         None => {
@@ -360,28 +300,32 @@ impl<'a> VM {
                         }
                     }
                 }
-                Op::MakeSet(count) => {
+               Op::MakeTuple(count) | Op::MakeSet(count) => {
                     let count = *count;
+                    let is_tuple = matches!(op, Op::MakeTuple(_));
+                    
                     if count == 0 {
-                        self.push(Value::from_set(Rc::new(RefCell::new(Vec::new()))));
+                        let val = if is_tuple {
+                            Value::from_tuple(Rc::new(RefCell::new(Vec::new())))
+                        } else {
+                            Value::from_set(Rc::new(RefCell::new(Vec::new())))
+                        };
+                        self.push(val);
                     } else {
                         let start = self.sp - count;
                         let mut vals = Vec::with_capacity(count);
                         
-                        unsafe {
-                            let src = self.stack.as_mut_ptr().add(start);
-                            let dst = vals.as_mut_ptr();
-                            
-                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
-                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::void()));
-                            vals.set_len(count);
-                            
-                            for i in 0..(count - 1) {
-                                std::ptr::write(src.add(i), Value::void());
-                            }
+                        for i in 0..count {
+                            vals.push(std::mem::replace(&mut self.stack[start + i], Value::void()));
                         }
                         
-                        self.tos = Value::from_set(Rc::new(RefCell::new(vals)));
+                        let container = if is_tuple {
+                            Value::from_tuple(Rc::new(RefCell::new(vals)))
+                        } else {
+                            Value::from_set(Rc::new(RefCell::new(vals)))
+                        };
+                        
+                        self.stack[start] = container;
                         self.sp = start + 1;
                     }
                 }
@@ -389,75 +333,49 @@ impl<'a> VM {
                     let count = *deep + 1;
                     let start = self.sp - count;
                     
-                    for i in 0..(count - 1) {
+                    for i in 0..count { 
                         let val = unsafe { self.stack.get_unchecked(start + i) }.clone();
                         self.push(val);
                     }
-                    let tos_clone = self.tos.clone();
-                    self.push(tos_clone);
                 }
-               Op::StoreIndex(count) => {
+                Op::StoreIndex(count) => {
                     let count = *count;
                     let to_set = self.pop();
-                    
+                      
                     if count > 1 {
-                        let mut indexes = Vec::with_capacity(count);
                         let start = self.sp - count;
                         
-                        unsafe {
-                            let src = self.stack.as_mut_ptr().add(start);
-                            let dst = indexes.as_mut_ptr();
-                            
-                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
-                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::void()));
-                            indexes.set_len(count);
-                            
-                            for i in 0..(count - 1) {
-                                std::ptr::write(src.add(i), Value::void());
-                            }
+                        let mut target = std::mem::replace(&mut self.stack[start - 1], Value::void());
+                        target.set_index_deep(&self.stack[start..start + count], to_set)?;
+                        
+                        for i in 0..count {
+                            self.stack[start + i] = Value::void();
                         }
                         
-                        self.sp = start;
-                        if self.sp > 0 {
-                            self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::void());
-                        }
-                        
-                        let mut target = self.pop();
-                        target.set_index_deep(indexes, to_set)?;
-                        self.push(target);
+                        self.stack[start - 1] = target;
+                        self.sp = start; 
                     } else {
                         let index = self.pop();
                         let mut target = self.pop();
                         target.set_index(index, to_set)?;
                         self.push(target);
                     }
-                }                
+                }             
+
                 Op::LoadIndex(count) => {
                     let count = *count;
                     let res = if count > 1 {
-                        let mut indexes = Vec::with_capacity(count);
                         let start = self.sp - count;
                         
-                        unsafe {
-                            let src = self.stack.as_mut_ptr().add(start);
-                            let dst = indexes.as_mut_ptr();
-                            
-                            std::ptr::copy_nonoverlapping(src, dst, count - 1);
-                            std::ptr::write(dst.add(count - 1), std::mem::replace(&mut self.tos, Value::void()));
-                            indexes.set_len(count);
-                            
-                            for i in 0..(count - 1) {
-                                std::ptr::write(src.add(i), Value::void());
-                            }
+                        let target = std::mem::replace(&mut self.stack[start - 1], Value::void());
+                        let value = target.load_index_deep(&self.stack[start..start + count])?;
+                        
+                        for i in 0..count {
+                            self.stack[start + i] = Value::void();
                         }
                         
-                        self.sp = start;
-                        if self.sp > 0 {
-                            self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::void());
-                        }
-
-                        let value = self.pop();
-                        value.load_index_deep(indexes)?
+                        self.sp = start - 1; 
+                        value
                     } else {
                         let index = self.pop();
                         let value = self.pop();
@@ -501,38 +419,31 @@ impl<'a> VM {
                     
                     match func_val.unpack() {
                         UnpackedValue::Number(func) => {
-                            if *n > 0 {
-                                self.stack[self.sp - 1] = std::mem::replace(&mut self.tos, Value::void());
-                                
-                                self.sp -= n;
-                                
-                                if self.sp > 0 {
-                                    self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::void());
+                            self.sp -= *n; 
+            
+                            self.run_func(func, *n, code)?; 
+                            
+                            if *n > 1 {
+                                for i in 0..(*n - 1) {
+                                    unsafe { *self.stack.get_unchecked_mut(self.sp + i) = Value::void(); }
                                 }
                             }
-                            
-                            self.run_func(func, *n, code)?;
                         }
                         UnpackedValue::Fn(target_ip, env_frame) => { 
                             let next_frame_idx = self.fp;
 
                             if *n > 0 {
-                                self.stack[self.sp - 1] = std::mem::replace(&mut self.tos, Value::void());
                                 let start = self.sp - *n;
-                                
+
                                 for i in start..self.sp {
-                                    let val = std::mem::replace(&mut self.stack[i], Value::void());
+                                    let val = std::mem::replace(unsafe { self.stack.get_unchecked_mut(i) }, Value::void());
                                     
                                     if self.fp >= self.frame.len() { self.frame.resize(self.fp + 1024, Value::void()); }
-                                    
-                                    unsafe { *self.frame.get_unchecked_mut(self.fp) = val; } 
+                                    unsafe { *self.frame.get_unchecked_mut(self.fp) = val; }
                                     self.fp += 1;
                                 }
 
                                 self.sp -= *n;
-                                if self.sp > 0 {
-                                    self.tos = std::mem::replace(&mut self.stack[self.sp - 1], Value::void());
-                                }
                             }
 
                             let current_idx = unsafe { ip_ptr.offset_from(base_ptr) as usize };
