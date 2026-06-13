@@ -1,5 +1,5 @@
 use std::{cell::RefCell, fs, io::{Read, Seek, Write}, rc::Rc};
-use crate::op::Op;
+use crate::{op::Op, value::UnpackedValue};
 use crate::consts;
 use crate::errors::VMError;
 use crate::value::{Iterator, Value};
@@ -62,20 +62,20 @@ impl<'a> VM {
     pub fn run_func(&mut self, func: i64, args_count: usize, code: &[Op<'a>]) -> Result<(), VMError> {
          match func { 
             1 => {
-                let arg = self.deref(&self.stack[self.sp]);
+                let arg = self.deref(&self.stack[self.sp]).unpack();
                 let res = match arg {
-                    Value::Str(s) => Value::Number(s.borrow().chars().count() as i64),
-                    Value::Set(s) => Value::Number(s.borrow().len() as i64),
+                    UnpackedValue::Str(s) => Value::from_number(s.borrow().chars().count() as i64),
+                    UnpackedValue::Set(s) => Value::from_number(s.borrow().len() as i64),
                     _ => return Err(VMError::BadArgument),
                 };
                 self.push(res);
             }
             2 => {
                 let res = {
-                    let s_val = match &self.stack[self.sp] {
-                        Value::Str(s) => s,
-                        Value::Ref(idx) => match &self.frame[*idx] {
-                            Value::Str(s) => s,
+                    let s_val = match self.stack[self.sp].unpack() {
+                        UnpackedValue::Str(s) => s,
+                        UnpackedValue::Ref(idx) => match self.frame[idx].unpack() {
+                            UnpackedValue::Str(s) => s,
                             _ => return Err(VMError::BadArgument),
                         }
                         _ => return Err(VMError::BadArgument),
@@ -83,19 +83,19 @@ impl<'a> VM {
                     let res_str = s_val.borrow();
 
                     let pattern_val = self.deref(&self.stack[self.sp + 1]);
-                    match pattern_val {
-                        Value::Char(c) => res_str.starts_with(*c),
-                        Value::Str(c) => res_str.starts_with(&*c.borrow()),
-                        unk => res_str.starts_with(&unk.to_string()) 
+                    match pattern_val.unpack() {
+                        UnpackedValue::Char(c) => res_str.starts_with(c),
+                        UnpackedValue::Str(c) => res_str.starts_with(&*c.borrow()),
+                        _ => return Err(VMError::BadArgument) 
                     }
                 };
-                self.push(Value::Bool(res));
+                self.push(Value::from_bool(res));
             }
             3 => {
                 let val = self.deref(&self.stack[self.sp]);
                 
-                let res = match val {
-                    Value::File(f) => {
+                let res = match val.unpack() {
+                    UnpackedValue::File(f) => {
                         let mut file_ref = f.file.try_borrow_mut()
                             .map_err(|_| VMError::FuncErr)?;
                             
@@ -104,9 +104,9 @@ impl<'a> VM {
                         
 
                         file_ref.read(&mut buffer)
-                            .map_err(|e| format!("Error while trying read the file ({}): {}", f, e)).map(|bb| String::from_utf8_lossy(&buffer[..bb])
+                            .map_err(|e| format!("Error while trying read the file ({}): {}", val, e)).map(|bb| String::from_utf8_lossy(&buffer[..bb])
                                     .into_owned())
-                            .map(|x| Value::Str(Rc::new(RefCell::new(x))))
+                            .map(|x| Value::from_str(Rc::new(RefCell::new(x))))
                     },
                     _ => return Err(VMError::BadArgument)
                 };
@@ -114,18 +114,18 @@ impl<'a> VM {
             }
             4 => {
                 let format: String = Self::format(&self.stack[self.sp..self.sp + args_count])?;
-                self.push(Value::Str(Rc::new(RefCell::new(format))));
+                self.push(Value::from_str(Rc::new(RefCell::new(format))));
             }
             5  => {
                 let target = self.deref(&self.stack[self.sp]).clone().make_iter()?;
-                self.push(Value::Iter(Box::new(crate::value::Iterator::Enumerate(Box::new(target), 0))));
+                self.push(Value::from_iter(Box::new(crate::value::Iterator::Enumerate(Box::new(target), 0))));
             }
             6 => {
                 let val = self.deref(&self.stack[self.sp]);
-                let res = match val {
-                    Value::File(f) => {
+                let res = match val.unpack() {
+                    UnpackedValue::File(f) => {
                         if let Err(e) = f.file.borrow_mut().seek(std::io::SeekFrom::Start(0)) {
-                            Value::Result(Box::new(Err(Value::new_str(
+                            Value::from_result(Box::new(Err(Value::new_str(
                                 format!("Error while trying seek the file({}): {}", f.path.display(), e)))))
                         } else {
                             let mut buffer = String::new();
@@ -137,7 +137,7 @@ impl<'a> VM {
                             Value::new_control(val)
                         }
                     },
-                    Value::Str(filename) => {
+                    UnpackedValue::Str(filename) => {
                         let res = fs::read_to_string(&*filename.borrow()).map(Value::new_str).map_err(|x| x.to_string());
                         Value::new_control(res)
                     }
@@ -162,8 +162,8 @@ impl<'a> VM {
             }
             9 => {
                 let val = self.deref(&self.stack[self.sp]);
-                let res = match val {
-                    Value::Result(s) => Value::Bool(s.is_ok()),
+                let res = match val.unpack() {
+                    UnpackedValue::Result(s) => Value::from_bool(s.is_ok()),
                     _ => return Err(VMError::BadArgument),
                 };
                 self.push(res);
@@ -171,9 +171,9 @@ impl<'a> VM {
             }
             10 => {
                 let val = self.deref(&self.stack[self.sp]);
-                let res = match val {
-                    Value::Str(s) => Value::Bool(s.borrow().is_empty()),
-                    Value::Set(s) => Value::Bool(s.borrow().is_empty()),
+                let res = match val.unpack() {
+                    UnpackedValue::Str(s) => Value::from_bool(s.borrow().is_empty()),
+                    UnpackedValue::Set(s) => Value::from_bool(s.borrow().is_empty()),
                     _ => return Err(VMError::BadArgument),
                 };
                 self.push(res);
@@ -181,25 +181,25 @@ impl<'a> VM {
             }
             11 => {
                 let val = self.deref(&self.stack[self.sp]);
-                let res = match val {
-                    Value::Cat(s) => Value::Bool(s.is_some()),
+                let res = match val.unpack() {
+                    UnpackedValue::Cat(s) => Value::from_bool(s.is_some()),
                     _ => return Err(VMError::BadArgument),
                 };
                 self.push(res);
             }
             12 => {
-                let id = match &self.stack[self.sp] {
-                    Value::Ref(idx) => *idx,
+                let id = match self.stack[self.sp].unpack() {
+                    UnpackedValue::Ref(idx) => idx,
                     _ => return Ok(()),
                 };
 
-                match &mut self.frame[id] {
-                    Value::Set(set) =>{
+                match &mut self.frame[id].unpack() {
+                    UnpackedValue::Set(set) =>{
                         set.borrow_mut().push(self.stack[self.sp + 1].clone())
                     }
                     _ => return Err(VMError::BadArgument),
                 }
-                self.push(Value::Void);
+                self.push(Value::void());
             }
             13 => {
                 if args_count > 0 {
@@ -214,25 +214,25 @@ impl<'a> VM {
             14 => {
                 let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = match arg.parse() {
-                    Ok(num) => Value::Result(Box::new(Ok(Value::Number(num)))),
-                    Err(e) => Value::Result(Box::new(Err(Value::new_str(e.to_string())))),
+                    Ok(num) => Value::from_result(Box::new(Ok(Value::from_number(num)))),
+                    Err(e) => Value::from_result(Box::new(Err(Value::new_str(e.to_string())))),
                 };
                 self.push(res);
             }
             15 => {
-                let mut arg = if let Value::Iter(i) = &self.stack[self.sp]
-                    && let Iterator::Range(r) = **i {
+                let mut arg = if let UnpackedValue::Iter(i) = &self.stack[self.sp].unpack()
+                    && let Iterator::Range(r) = ***i {
                         r
                 } else {
                     return Err(VMError::BadArgument)
                 };
                 arg.step = self.stack[self.sp + 1].expect_number()?;
-                self.push(Value::Iter(Box::new(Iterator::Range(arg))));
+                self.push(Value::from_iter(Box::new(Iterator::Range(arg))));
             }
             16 => {
                 let arg = self.deref(&self.stack[self.sp]).eval_str();
                 
-                let res = Value::Iter(Box::new(crate::value::Iterator::Lines(crate::value::LinesIter {
+                let res = Value::from_iter(Box::new(crate::value::Iterator::Lines(crate::value::LinesIter {
                     source: arg.to_string(),
                     offset: 0,
                 })));
@@ -241,7 +241,7 @@ impl<'a> VM {
             }
             17 => {
                 let arg = self.deref(&self.stack[self.sp]).eval_str();
-                let res = Value::Iter(Box::new(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
+                let res = Value::from_iter(Box::new(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
                     source: arg.to_string(),
                     offset: 0,
                 })));
@@ -249,13 +249,13 @@ impl<'a> VM {
             }
             18 => {
                 let delimiter = self.stack[self.sp + 1].eval_str();
-                let source = match &self.stack[self.sp] {
-                    Value::Ref(i) => self.frame[*i].eval_str(),
-                    Value::Str(arg) => arg.borrow().to_string(),
+                let source = match &self.stack[self.sp].unpack() {
+                    UnpackedValue::Ref(i) => self.frame[*i].eval_str(),
+                    UnpackedValue::Str(arg) => arg.borrow().to_string(),
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let res = Value::Iter(Box::new(crate::value::Iterator::Split(crate::value::SplitIter {
+                let res = Value::from_iter(Box::new(crate::value::Iterator::Split(crate::value::SplitIter {
                     source,
                     delimiter,
                     offset: 0,
@@ -270,9 +270,9 @@ impl<'a> VM {
 
                 let mut result = None;
                 {
-                    let iter_ref = match &mut self.stack[self.sp] {
-                        Value::Ref(i) => &mut self.frame[*i],
-                        arg => arg,
+                    let iter_ref = match &mut self.stack[self.sp].unpack() {
+                        UnpackedValue::Ref(i) => &mut self.frame[*i],
+                        _ => &mut self.stack[self.sp],
                     };
                     
                     for _ in 0..=n {
@@ -287,23 +287,23 @@ impl<'a> VM {
                 }
 
                 let res = match result {
-                    Some(val) => Value::Cat(Some(Box::new(val))),
-                    None => Value::Cat(None),
+                    Some(val) => Value::from_cat(Some(Box::new(val))),
+                    None => Value::from_cat(None),
                 };
                 self.push(res);
             }
             20 => {
                 let mut result_set = Vec::new();
                 {
-                    let iter_ref = match &mut self.stack[self.sp] {
-                        Value::Ref(i) => &mut self.frame[*i],
-                        arg => arg,
+                    let iter_ref = match &mut self.stack[self.sp].unpack() {
+                        UnpackedValue::Ref(i) => &mut self.frame[*i],
+                        _ => &mut self.stack[self.sp],
                     };
                     while let Some(val) = iter_ref.next()? {
                         result_set.push(val);
                     }
                 }
-                self.push(Value::Set(Rc::new(RefCell::new(result_set))));
+                self.push(Value::from_set(Rc::new(RefCell::new(result_set))));
             }
             21 => {
                 let arg = self.deref(&self.stack[self.sp]).to_string();
@@ -321,7 +321,7 @@ impl<'a> VM {
                 } else {
                     arg.contains(&pattern) 
                 };
-                self.push(Value::Bool(res));
+                self.push(Value::from_bool(res));
             }
             22 => {
                 let arg = self.deref(&self.stack[self.sp]).eval_str();
@@ -329,9 +329,9 @@ impl<'a> VM {
                 self.push(res);
             }
             23 => {
-                let arg = match &mut self.stack[self.sp] {
-                    Value::Ref(i) => &mut self.frame[*i],
-                    arg => arg,
+                let arg = match &mut self.stack[self.sp].unpack() {
+                    UnpackedValue::Ref(i) => &mut self.frame[*i],
+                    _ => &mut self.stack[self.sp]
                 }.eval_str();
                 let res = Value::new_str(arg.to_uppercase());
                 self.push(res);
@@ -340,27 +340,27 @@ impl<'a> VM {
                 let new_line = func == 25;
 
                 let res = Self::write(self.stack[self.sp].clone(), &self.stack[self.sp + 1..self.sp + args_count], new_line)
-                    .map(|_| Value::Void).map_err(|_| "error with write".to_string());
+                    .map(|_| Value::void()).map_err(|_| "error with write".to_string());
                 self.push(Value::new_control(res));
             }
             26 | 27 => {
                 let new_line = func == 27;
                 let res = 
-                    Self::write(std::io::stdout(), &self.stack[self.sp..self.sp + args_count], new_line).map(|_| Value::Void).map_err(|_| "error with write into: stdout".to_string());
+                    Self::write(std::io::stdout(), &self.stack[self.sp..self.sp + args_count], new_line).map(|_| Value::void()).map_err(|_| "error with write into: stdout".to_string());
                 self.push(Value::new_control(res));
             }
             28 => {
-                let set = match &self.stack[self.sp] {
-                    Value::Set(s) => s.clone(),
-                    Value::Ref(idx) => match &self.frame[*idx] {
-                        Value::Set(s) => s.clone(),
+                let set = match &self.stack[self.sp].unpack() {
+                    UnpackedValue::Set(s) => s.clone(),
+                    UnpackedValue::Ref(idx) => match &self.frame[*idx].unpack() {
+                        UnpackedValue::Set(s) => s.clone(),
                         _ => return Err(VMError::BadArgument),
                     },
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let (lambda_ip, stk) = match self.stack[self.sp + 1] {
-                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
+                let (lambda_ip, stk) = match self.stack[self.sp + 1].unpack() {
+                    UnpackedValue::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
@@ -369,31 +369,32 @@ impl<'a> VM {
                 for item in set.borrow().iter() {
                     self.run_lambda(code, lambda_ip,vec![item.clone()], stk)?;
                     
-                    let result = self.pop();
+                    let result = self.pop().unpack();
                     match result {
-                        Value::Cat(res) => {
-                            if let Some(res) =  res {
-                                result_set.push(*res)
+                        UnpackedValue::Cat(res) => {
+                            if let Some(res) =  &*res {
+                                let res =(**res).clone();
+                                result_set.push(res)
                             }
                         }
                         _ => return Err(VMError::BadArgument), 
                     }
                 }
-                self.push(Value::Set(Rc::new(RefCell::new(result_set))));
+                self.push(Value::from_set(Rc::new(RefCell::new(result_set))));
 
             }
             29 => {
-                let set = match &self.stack[self.sp] {
-                    Value::Set(s) => s.clone(),
-                    Value::Ref(idx) => match &self.frame[*idx] {
-                        Value::Set(s) => s.clone(),
+                let set = match &self.stack[self.sp].unpack() {
+                    UnpackedValue::Set(s) => s.clone(),
+                    UnpackedValue::Ref(idx) => match &self.frame[*idx].unpack() {
+                        UnpackedValue::Set(s) => s.clone(),
                         _ => return Err(VMError::BadArgument),
                     },
                     _ => return Err(VMError::BadArgument),
                 };
                 
-                let (lambda_ip, stk) = match self.stack[self.sp + 1] {
-                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
+                let (lambda_ip, stk) = match self.stack[self.sp + 1].unpack() {
+                    UnpackedValue::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
@@ -405,26 +406,21 @@ impl<'a> VM {
                     let result = self.pop();
                     result_set.push(result);
                 }
-                
-                self.push(Value::Set(Rc::new(RefCell::new(result_set))));
+                self.push(Value::from_set(Rc::new(RefCell::new(result_set))));
             }
             30 => {
                 print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
                 let _ = std::io::stdout().flush();
-                self.push(Value::Void)
+                self.push(Value::void())
             },
             31 => {
-                let set = match &self.stack[self.sp] {
-                    Value::Set(s) => s.clone(),
-                    Value::Ref(idx) => match &self.frame[*idx] {
-                        Value::Set(s) => s.clone(),
-                        _ => return Err(VMError::BadArgument),
-                    },
-                    _ => return Err(VMError::BadArgument),
+                let set = match self.deref(&self.stack[self.sp]).unpack() {
+                    UnpackedValue::Set(i) => i.clone(),
+                    _ => return Err(VMError::BadArgument)
                 };
                 
-                let (lambda_ip , stk) = match self.stack[self.sp + 1] {
-                    Value::Fn(ip, stk) => (ip as usize, stk as usize),
+                let (lambda_ip , stk) = match self.stack[self.sp + 1].unpack() {
+                    UnpackedValue::Fn(ip, stk) => (ip as usize, stk as usize),
                     _ => return Err(VMError::BadArgument),
                 };
 
@@ -439,7 +435,7 @@ impl<'a> VM {
                     }
                 }
                 
-                self.push(Value::Set(Rc::new(RefCell::new(result_set))));
+                self.push(Value::from_set(Rc::new(RefCell::new(result_set))));
             }
             _ => unreachable!()
         }
@@ -448,8 +444,8 @@ impl<'a> VM {
 
     #[inline(always)]
     pub fn deref(&'a self, arg: &'a Value) -> &'a Value {
-        match arg {
-            Value::Ref(i) => unsafe {&self.frame.get_unchecked(*i)},
+        match arg.unpack() {
+            UnpackedValue::Ref(i) => unsafe {self.frame.get_unchecked(i)},
             _ => arg
         }
     }
