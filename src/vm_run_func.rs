@@ -1,14 +1,13 @@
-use std::{cell::RefCell, fs, io::{Read, Seek, Write}, rc::Rc};
+use std::{cell::RefCell, char, fs, io::{Read, Seek, Write}, rc::Rc};
 use crate::{op::Op};
 use crate::consts;
-use crate::errors::VMError;
 use crate::value::{Iterator, Value};
 use crate:: vm::{CallFrame, VM};
 
 impl<'a> VM {
-    fn format(args: &[Value]) -> Result<String, VMError> {
+    fn format(args: &[Value]) -> String {
         if args.is_empty() {
-            return Err(VMError::NeedMoreArgs);
+            return "".to_string();
         }
 
         let format_str = args[0].to_string();
@@ -19,54 +18,42 @@ impl<'a> VM {
         while let Some(c) = chars.next() {
             match c {
                 '{' => match chars.peek() {
-                    Some(&'{') => {
-                        chars.next();
-                        output.push('{');
-                    }
                     Some(&'}') => {
                         chars.next();
-                        let value = values.next().ok_or(VMError::NeedMoreArgs)?;
-                        output.push_str(&value.to_string());
+                        if let Some(val) = values.next() {
+                            output.push_str(&val.to_string());
+                        }
                     }
-                    _ => return Err(VMError::BadArgument),
+                    Some(c) => {
+                        output.push(*c);
+                    }
+                    None => break, 
                 },
-                '}' => {
-                    if chars.peek() == Some(&'}') {
-                        chars.next();
-                        output.push('}');
-                    } else {
-                        return Err(VMError::BadArgument)
-                    }
-                }
                 _ => output.push(c),
             }
         }
 
-        if values.next().is_some() {
-            return Err(VMError::TooManyArgs);
-        }
-
-        Ok(output)
+        output
     }
 
-    fn write<W: Write>(mut file: W, args: &[Value], newline: bool) -> Result<(), VMError> {
-        let output = Self::format(args)?;
-        file.write_all(output.as_bytes()).map_err(|_| VMError::WriteError)?;
+    fn write<W: Write>(mut file: W, args: &[Value], newline: bool) -> Result<Value, String> {
+        let output = Self::format(args);
+        file.write_all(output.as_bytes()).map_err(|e| e.to_string())?;
         if newline {
-            file.write_all(b"\n").map_err(|_| VMError::WriteError)?;
+            file.write_all(b"\n").map_err(|e| e.to_string())?;
         }
-        file.flush().map_err(|_| VMError::WriteError)?;
-        Ok(())
+        file.flush().map_err(|e| e.to_string())?;
+        Ok(Value::Void)
     }
 
-    pub fn run_func(&mut self, func: i64, args_count: usize, code: &[Op<'a>]) -> Result<(), VMError> {
+    pub fn run_func(&mut self, func: i64, args_count: usize, code: &[Op<'a>]) {
          match func { 
             1 => {
                 let arg = self.deref(&self.stack[self.sp]);
                 let res = match arg {
                     Value::Str(s) => Value::Number(s.borrow().chars().count() as i64),
                     Value::Set(s) => Value::Number(s.borrow().len() as i64),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 self.push(res);
             }
@@ -76,9 +63,9 @@ impl<'a> VM {
                         Value::Str(s) => s,
                         Value::Ref(idx) => match &self.frame[*idx] {
                             Value::Str(s) => s,
-                            _ => return Err(VMError::BadArgument),
+                            _ => unreachable!(),
                         }
-                        _ => return Err(VMError::BadArgument),
+                        _ => unreachable!(),
                     };
                     let res_str = s_val.borrow();
 
@@ -86,7 +73,7 @@ impl<'a> VM {
                     match pattern_val {
                         Value::Char(c) => res_str.starts_with(*c),
                         Value::Str(c) => res_str.starts_with(&*c.borrow()),
-                        _ => return Err(VMError::BadArgument) 
+                        _ => unreachable!() 
                     }
                 };
                 self.push(Value::Bool(res));
@@ -96,28 +83,24 @@ impl<'a> VM {
                 
                 let res = match val {
                     Value::File(f) => {
-                        let mut file_ref = f.file.try_borrow_mut()
-                            .map_err(|_| VMError::FuncErr)?;
-                            
+                        let mut file_ref = f.file.borrow_mut();
                         let mut buffer = vec![0u8; consts::READ_AT_ONCE];
                         
-                        
-
                         file_ref.read(&mut buffer)
                             .map_err(|e| format!("Error while trying read the file ({}): {}", val, e)).map(|bb| String::from_utf8_lossy(&buffer[..bb])
                                     .into_owned())
                             .map(|x| Value::Str(Rc::new(RefCell::new(x))))
                     },
-                    _ => return Err(VMError::BadArgument)
+                    _ => unreachable!()
                 };
                 self.push(Value::new_control(res));
             }
             4 => {
-                let format: String = Self::format(&self.stack[self.sp..self.sp + args_count])?;
+                let format: String = Self::format(&self.stack[self.sp..self.sp + args_count]);
                 self.push(Value::Str(Rc::new(RefCell::new(format))));
             }
             5  => {
-                let target = self.deref(&self.stack[self.sp]).clone().make_iter()?;
+                let target = self.deref(&self.stack[self.sp]).clone().make_iter();
                 self.push(Value::Iter(Box::new(crate::value::Iterator::Enumerate(Box::new(target), 0))));
             }
             6 => {
@@ -141,30 +124,30 @@ impl<'a> VM {
                         let res = fs::read_to_string(&*filename.borrow()).map(Value::new_str).map_err(|x| x.to_string());
                         Value::new_control(res)
                     }
-                    _ => return Err(VMError::BadArgument)
+                    _ => unreachable!()
                 };
                 self.push(res);
             }
             7 => {
-                let filename = self.stack[self.sp].eval_str()?;
-                let file = Value::open_file(&filename);
+                let filename = self.stack[self.sp].eval_str();
+                let file = crate::file::FileHandler::new_file(&filename);
                 self.push(file); 
             }
             8 => {
-                let filename = self.stack[self.sp].eval_str()?;
+                let filename = self.stack[self.sp].eval_str();
                 let opt = if args_count > 1 {
-                    self.stack[self.sp + 1].expect_number()?
+                    self.stack[self.sp + 1].expect_number()
                 } else {
                     consts::ALL_FLAGS
                 };
-                let res = Value::new_control(Value::new_file(&filename, opt).map_err(|_| format!("error with open: {}", filename)));
+                let res = crate::file::FileHandler::open(&filename, opt);
                 self.push(res); 
             }
             9 => {
                 let val = self.deref(&self.stack[self.sp]);
                 let res = match val {
                     Value::Result(s) => Value::Bool(s.is_ok()),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 self.push(res);
 
@@ -174,7 +157,7 @@ impl<'a> VM {
                 let res = match val {
                     Value::Str(s) => Value::Bool(s.borrow().is_empty()),
                     Value::Set(s) => Value::Bool(s.borrow().is_empty()),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 self.push(res);
 
@@ -183,27 +166,29 @@ impl<'a> VM {
                 let val = self.deref(&self.stack[self.sp]);
                 let res = match val {
                     Value::Cat(s) => Value::Bool(s.is_some()),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 self.push(res);
             }
             12 => {
                 let id = match self.stack[self.sp] {
                     Value::Ref(idx) => idx,
-                    _ => return Ok(()),
+                    _ => {
+                        return
+                    }
                 };
 
                 match &mut self.frame[id] {
                     Value::Set(set) =>{
                         set.borrow_mut().push(self.stack[self.sp + 1].clone())
                     }
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 }
                 self.push(Value::Void);
             }
             13 => {
                 if args_count > 0 {
-                    let format = Self::format(&self.stack[self.sp..self.sp + args_count])?;
+                    let format = Self::format(&self.stack[self.sp..self.sp + args_count]);
                     print!("{}", format);
                     let _ = std::io::stdout().flush();
                 }
@@ -212,7 +197,7 @@ impl<'a> VM {
                 self.push(Value::new_str(s.trim()));
             }
             14 => {
-                let arg = self.deref(&self.stack[self.sp]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = match arg.parse() {
                     Ok(num) => Value::Result(Box::new(Ok(Value::Number(num)))),
                     Err(e) => Value::Result(Box::new(Err(Value::new_str(e.to_string())))),
@@ -224,13 +209,13 @@ impl<'a> VM {
                     && let Iterator::Range(r) = **i {
                         r
                 } else {
-                    return Err(VMError::BadArgument)
+                    unreachable!()
                 };
-                arg.step = self.stack[self.sp + 1].expect_number()?;
+                arg.step = self.stack[self.sp + 1].expect_number();
                 self.push(Value::Iter(Box::new(Iterator::Range(arg))));
             }
             16 => {
-                let arg = self.deref(&self.stack[self.sp]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 
                 let res = Value::Iter(Box::new(crate::value::Iterator::Lines(crate::value::LinesIter {
                     source: arg.to_string(),
@@ -240,7 +225,7 @@ impl<'a> VM {
                 self.push(res);
             }
             17 => {
-                let arg = self.deref(&self.stack[self.sp]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = Value::Iter(Box::new(crate::value::Iterator::SplitWhitespace(crate::value::SplitWhitespaceIter {
                     source: arg.to_string(),
                     offset: 0,
@@ -248,11 +233,11 @@ impl<'a> VM {
                 self.push(res);
             }
             18 => {
-                let delimiter = self.stack[self.sp + 1].eval_str()?;
+                let delimiter = self.stack[self.sp + 1].eval_str();
                 let source = match &self.stack[self.sp] {
-                    Value::Ref(i) => self.frame[*i].eval_str()?,
+                    Value::Ref(i) => self.frame[*i].eval_str(),
                     Value::Str(arg) => arg.borrow().to_string(),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 
                 let res = Value::Iter(Box::new(crate::value::Iterator::Split(crate::value::SplitIter {
@@ -263,9 +248,9 @@ impl<'a> VM {
                 self.push(res);
             }
             19 => {
-                let n = self.stack[self.sp + 1].expect_number()?;
+                let n = self.stack[self.sp + 1].expect_number();
                 if n < 0 {
-                    return Err(VMError::BadArgument);
+                    unreachable!();
                 }
 
                 let mut result = None;
@@ -276,7 +261,7 @@ impl<'a> VM {
                     };
                     
                     for _ in 0..=n {
-                        match iter_ref.next()? {
+                        match iter_ref.next() {
                             Some(val) => result = Some(val),
                             None => {
                                 result = None;  
@@ -299,7 +284,7 @@ impl<'a> VM {
                         Value::Ref(i) => &mut self.frame[*i],
                         _ => &mut self.stack[self.sp],
                     };
-                    while let Some(val) = iter_ref.next()? {
+                    while let Some(val) = iter_ref.next() {
                         result_set.push(val);
                     }
                 }
@@ -324,7 +309,7 @@ impl<'a> VM {
                 self.push(Value::Bool(res));
             }
             22 => {
-                let arg = self.deref(&self.stack[self.sp]).eval_str()?;
+                let arg = self.deref(&self.stack[self.sp]).eval_str();
                 let res = Value::new_str(arg.to_lowercase());
                 self.push(res);
             }
@@ -332,21 +317,20 @@ impl<'a> VM {
                 let arg = match &mut self.stack[self.sp] {
                     Value::Ref(i) => &mut self.frame[*i],
                     _ => &mut self.stack[self.sp]
-                }.eval_str()?;
+                }.eval_str();
                 let res = Value::new_str(arg.to_uppercase());
                 self.push(res);
             }
             24 | 25 => {
                 let new_line = func == 25;
 
-                let res = Self::write(self.stack[self.sp].clone(), &self.stack[self.sp + 1..self.sp + args_count], new_line)
-                    .map(|_| Value::Void).map_err(|_| "error with write".to_string());
+                let res = Self::write(self.stack[self.sp].clone(), &self.stack[self.sp + 1..self.sp + args_count], new_line);
                 self.push(Value::new_control(res));
             }
             26 | 27 => {
                 let new_line = func == 27;
                 let res = 
-                    Self::write(std::io::stdout(), &self.stack[self.sp..self.sp + args_count], new_line).map(|_| Value::Void).map_err(|_| "error with write into: stdout".to_string());
+                    Self::write(std::io::stdout(), &self.stack[self.sp..self.sp + args_count], new_line);
                 self.push(Value::new_control(res));
             }
             28 => {
@@ -354,20 +338,20 @@ impl<'a> VM {
                     Value::Set(s) => s.clone(),
                     Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Set(s) => s.clone(),
-                        _ => return Err(VMError::BadArgument),
+                        _ => unreachable!(),
                     },
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 
                 let (lambda_ip, stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set.borrow().iter() {
-                    self.run_lambda(code, lambda_ip,vec![item.clone()], stk)?;
+                    self.run_lambda(code, lambda_ip,vec![item.clone()], stk);
                     
                     let result = self.pop();
                     match result {
@@ -377,7 +361,7 @@ impl<'a> VM {
                                 result_set.push(res)
                             }
                         }
-                        _ => return Err(VMError::BadArgument), 
+                        _ => unreachable!(), 
                     }
                 }
                 self.push(Value::Set(Rc::new(RefCell::new(result_set))));
@@ -388,20 +372,20 @@ impl<'a> VM {
                     Value::Set(s) => s.clone(),
                     Value::Ref(idx) => match &self.frame[*idx] {
                         Value::Set(s) => s.clone(),
-                        _ => return Err(VMError::BadArgument),
+                        _ => unreachable!(),
                     },
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
                 
                 let (lambda_ip, stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set.borrow().iter() {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
+                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk);
                     
                     let result = self.pop();
                     result_set.push(result);
@@ -416,18 +400,18 @@ impl<'a> VM {
             31 => {
                 let set = match self.deref(&self.stack[self.sp]) {
                     Value::Set(i) => i.clone(),
-                    _ => return Err(VMError::BadArgument)
+                    _ => unreachable!()
                 };
                 
                 let (lambda_ip , stk) = match self.stack[self.sp + 1] {
                     Value::Fn(ip, stk) => (ip as usize, stk as usize),
-                    _ => return Err(VMError::BadArgument),
+                    _ => unreachable!(),
                 };
 
                 let mut result_set = Vec::new();
                 
                 for item in set.borrow().iter() {
-                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk)?;
+                    self.run_lambda(code, lambda_ip, vec![item.clone()], stk);
                     
                     let cond = self.pop();
                     if cond.is_truthy() {
@@ -439,7 +423,6 @@ impl<'a> VM {
             }
             _ => unreachable!()
         }
-        Ok(())
     } 
 
     #[inline(always)]
@@ -450,7 +433,7 @@ impl<'a> VM {
         }
     }
    
-    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, env_frame: usize) -> Result<(), VMError> {
+    pub fn run_lambda(&mut self, code: &[Op<'a>], target_ip: usize, args: Vec<Value>, env_frame: usize) {
         let parent_frame = if env_frame < self.call_stack.len() {
             env_frame
         } else {
@@ -476,7 +459,6 @@ impl<'a> VM {
             self.fp += 1;
         }
 
-        self.run(code, target_ip)?;
-        Ok(())
+        self.run(code, target_ip);
     }
 }

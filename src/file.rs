@@ -5,8 +5,7 @@ use std::{
     rc::Rc
 };
 
-use crate::consts;
-use crate::errors::VMError;
+use crate::{consts, value::Value};
 
 #[derive(Debug, Clone)]
 pub struct FileHandler {
@@ -21,23 +20,24 @@ impl std::fmt::Display for FileHandler {
 }
 
 impl FileHandler {
-    pub fn new_file(filename: &str) -> Result<Self, VMError> {
-        match File::create(filename) {
-            Ok(file) => Ok(Self {
+    pub fn new_file(filename: &str) -> Value {
+        let res = match File::create(filename) {
+            Ok(file) => Ok(Value::File(Box::new(Self {
                 file: Rc::new(RefCell::new(file)),
                 path: filename.into()
-            }),
-            Err(_) => Err(VMError::FileError)
-        } 
+            }))),
+            Err(_) => Err(format!("error with open: {}", filename))
+        } ;
+        Value::new_control(res)
     }
 
-    pub fn open(filename: &str, opt: i64) -> Result<Self, VMError> {
+    pub fn open(filename: &str, opt: i64) -> Value {
         let read = consts::READ_FM & opt != 0; 
         let truncate = consts::TRUNCATE_FM & opt != 0;
         let write = consts::WRITE_FM & opt != 0 || truncate;
         let create = consts::CREATE_FM & opt != 0;
         
-        match OpenOptions::new()
+        let res = match OpenOptions::new()
             .read(read)
             .write(write)
             .create(create)
@@ -45,13 +45,14 @@ impl FileHandler {
             .truncate(truncate)
             .open(filename) {
                 Ok(file) => {
-                    Ok(Self {
+                    Ok(Value::File(Box::new(Self {
                         file: Rc::new(RefCell::new(file)),
                         path: filename.into()
-                    })
+                    })))
                 }
-                Err(_) => Err(VMError::FileError)
-        }
+                Err(_) => Err(format!("error with open: {}", filename))
+        };
+        Value::new_control(res)
     }
     
 }

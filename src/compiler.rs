@@ -110,7 +110,9 @@ impl<'a> Compiler<'a> {
             "readch" | "read" => args.len() == 1,
             "readln" | "clear_console" => true,
             "format" | "write" | "writeln" | "print" | "println" => true,
-            "create" | "truncate" | "open" | "parse" | "lines" | "split_whitespace" | "to_lower" | "to_upper" => {
+            "open" => 
+                args.len() > 0 && Self::types_match(&Type::Str, &args[0]),
+            "create" | "truncate" | "parse" | "lines" | "split_whitespace" | "to_lower" | "to_upper" => {
                 args.len() == 1 && Self::types_match(&Type::Str, &args[0])
             },
             "starts_with" | "split" => {
@@ -167,7 +169,7 @@ impl<'a> Compiler<'a> {
         let mut old_vals = Vec::new();
 
         if loop_vars.len() > 1 {
-            self.code.push(Op::UnpackTuple(loop_vars.len()));
+            self.code.push(Op::UnpackTuple);
             for name in loop_vars.iter().rev() {
                 let var_id = self.next_slot;
                 self.next_slot += 1;
@@ -442,6 +444,14 @@ impl<'a> Compiler<'a> {
             self.advance_token();
             let oth_tp = self.parse_power()?;
 
+            if !is_star {
+                match self.code.last() {
+                    Some(Op::PushNumber(0)) => return self.throw_error(CompilerError::UnexpectedArg, "Division by zero is not allowed"),
+                    Some(Op::PushFLoat(f)) if *f == 0.0 => return self.throw_error(CompilerError::UnexpectedArg, "Division by zero is not allowed"),
+                    _ => {}
+                }
+            }
+
             if tp == Type::Float || oth_tp == Type::Float {
                 if !Self::types_match(&tp, &Type::Float) && tp != Type::Infer {
                     return self.throw_error(CompilerError::UnexpectedArg, "Expected float");
@@ -477,6 +487,14 @@ impl<'a> Compiler<'a> {
             self.advance_token();
             let oth_tp = self.parse_power()?;
             
+            if matches!(oper, Op::Pow) {
+                match self.code.last() {
+                    Some(Op::PushNumber(n)) if *n < 0 => return self.throw_error(CompilerError::UnexpectedArg, "Power must be positive"),
+                    Some(Op::PushFLoat(f)) if *f < 0.0 => return self.throw_error(CompilerError::UnexpectedArg, "Power must be positive"),
+                    _ => {}
+                }
+            }
+
             if !Self::types_match(&tp, &Type::Number) && tp != Type::Infer {
                 return self.throw_error(CompilerError::UnexpectedArg, "Expected number in power/mod operation");
             }
@@ -820,14 +838,27 @@ impl<'a> Compiler<'a> {
         loop {
             if self.next_if(Token::LBracket) {
                 let idx_type = self.parse_expression()?;
+                
+                if let Some(Op::PushNumber(n)) = self.code.last() 
+                    && *n < 0 {
+                        return self.throw_error(CompilerError::UnexpectedArg, "Index cannot be negative");
+                }
+
                 if !Self::types_match(&idx_type, &Type::Number) && !Self::types_match(&idx_type, &Type::Iter(Box::new(Type::Number))) {
                     return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected number for index, finded: {:?}", idx_type));
                 }
                 self.expect(Token::RBracket)?;
+                
                 let mut arg_count = 1;
                 while self.next_if(Token::LBracket) {
                     arg_count += 1;
                     let inner_idx_type = self.parse_expression()?;
+
+                    if let Some(Op::PushNumber(n)) = self.code.last()
+                        && *n < 0 {
+                            return self.throw_error(CompilerError::UnexpectedArg, "Index cannot be negative");
+                    }
+
                     if !Self::types_match(&inner_idx_type, &Type::Number) && !Self::types_match(&inner_idx_type, &Type::Iter(Box::new(Type::Number))) {
                         return self.throw_error(CompilerError::UnexpectedArg, &format!("Expected number for index, finded: {:?}", idx_type));
                     }
@@ -952,7 +983,7 @@ impl<'a> Compiler<'a> {
         }
 
         if is_tuple {
-            self.code.push(Op::UnpackTuple(names.len()));
+            self.code.push(Op::UnpackTuple);
             
             for (i, name) in names.into_iter().enumerate().rev() {
                 let tp = types[i].clone().unwrap_or(Type::Infer);

@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use crate::op::Op;
 use crate::consts;
-use crate::errors::VMError;
 use crate::value::Value;
 
 pub struct VM {
@@ -73,7 +72,7 @@ impl<'a> VM {
     }
 
     #[inline(always)]
-    pub fn run(&mut self, code: &[Op<'a>], start_ip: usize) -> Result<(), VMError> {
+    pub fn run(&mut self, code: &[Op<'a>], start_ip: usize) {
         let base_ptr = code.as_ptr();
         let end_ptr = unsafe { base_ptr.add(code.len()) }; 
         
@@ -110,7 +109,7 @@ impl<'a> VM {
                             Ok(inner_val) => self.push(inner_val.clone()),
                             Err(err_val) => {
                                 let return_val = Value::Result(Box::new(Err(err_val.clone())));
-                                let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
+                                let frame = self.call_stack.pop().unwrap();
                                 
                                 self.fp = self.now_frame;
                                 self.now_frame = frame.old_frame;
@@ -131,7 +130,7 @@ impl<'a> VM {
                             }
                             None => {
                                 let return_val = Value::Cat(None);
-                                let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
+                                let frame = self.call_stack.pop().unwrap();
                                 
                                 self.fp = self.now_frame;
                                 self.now_frame = frame.old_frame;
@@ -146,7 +145,7 @@ impl<'a> VM {
                                 continue;
                             }
                         },
-                        _ => return Err(VMError::UnExpectedType),
+                        _ => unreachable!()
                     }
                 }
                 Op::Plus | Op::Mod | Op::Sub | Op::Mult | Op::Div | Op::Pow | Op::ArifmAnd | Op::ArifmOr => {
@@ -154,14 +153,14 @@ impl<'a> VM {
                     let left = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
                     
                     match *op {
-                        Op::Plus => left.add_assign(right)?,
-                        Op::Sub => left.sub_assign(right)?,
-                        Op::Mult => left.mul_assign(right)?,
-                        Op::Div => left.div_assign(right)?,
-                        Op::Pow => left.pow_assign(right)?,
-                        Op::ArifmAnd => left.arifm_and_assign(right)?,
-                        Op::ArifmOr => left.arifm_or_assign(right)?,
-                        Op::Mod => left.arifm_mod_assign(right)?,
+                        Op::Plus => left.add_assign(right),
+                        Op::Sub => left.sub_assign(right),
+                        Op::Mult => left.mul_assign(right),
+                        Op::Div => left.div_assign(right),
+                        Op::Pow => left.pow_assign(right),
+                        Op::ArifmAnd => left.arifm_and_assign(right),
+                        Op::ArifmOr => left.arifm_or_assign(right),
+                        Op::Mod => left.arifm_mod_assign(right),
                         _ => unreachable!(),
                     }
                 }
@@ -180,24 +179,16 @@ impl<'a> VM {
                     };
                     *left = Value::Bool(result);
                 }
-                Op::UnpackTuple(count) => {
+                Op::UnpackTuple => {
                     let val = self.pop();
                     if let Value::Tuple(vals) = val {
                         let vals = vals.borrow();
-                        if vals.len() != *count {
-                            return Err(VMError::EmptyStack);
-                        }
                         for v in vals.iter() {
                             self.push(v.clone());
                         }
-                    } else {
-                        return Err(VMError::EmptyStack);
-                    }
+                    }  
                 }
                 Op::LoadGlobal(idx) => {
-                    if *idx >= self.fp {
-                        return Err(VMError::EmptyStack);
-                    }
                     self.push(unsafe {self.frame.get_unchecked(*idx)}.clone());
                 }
                 Op::MakeOk => {
@@ -225,12 +216,12 @@ impl<'a> VM {
                 Op::MakeRange(incl) => {
                     let end = self.pop();
                     let start = self.pop();
-                    self.push(Value::make_range(start, end, *incl)?);
+                    self.push(Value::make_range(start, end, *incl));
                 }
                 Op::MakeIter => {
                     let val = self.pop();
                     self.push(
-                        if matches!(val, Value::Iter(_)) {val} else {Value::Iter(Box::new(val.make_iter()?))}
+                        if matches!(val, Value::Iter(_)) {val} else {Value::Iter(Box::new(val.make_iter()))}
                     );
                 }
                 Op::Jump(target) => {
@@ -286,7 +277,7 @@ impl<'a> VM {
                 }
                 Op::IterNext(target) => {
                     let tos = unsafe { self.stack.get_unchecked_mut(self.sp - 1) };
-                    let val = tos.next()?;
+                    let val = tos.next();
                     match val {
                         Some(val) => self.push(val),
                         None => {
@@ -341,7 +332,7 @@ impl<'a> VM {
                         let start = self.sp - count;
                         
                         let mut target = std::mem::replace(&mut self.stack[start - 1], Value::Void);
-                        target.set_index_deep(&self.stack[start..start + count], to_set)?;
+                        target.set_index_deep(&self.stack[start..start + count], to_set);
                         
                         for i in 0..count {
                             self.stack[start + i] = Value::Void;
@@ -352,7 +343,7 @@ impl<'a> VM {
                     } else {
                         let index = self.pop();
                         let mut target = self.pop();
-                        target.set_index(index, to_set)?;
+                        target.set_index(index, to_set);
                         self.push(target);
                     }
                 }             
@@ -363,7 +354,7 @@ impl<'a> VM {
                         let start = self.sp - count;
                         
                         let target = std::mem::replace(&mut self.stack[start - 1], Value::Void);
-                        let value = target.load_index_deep(&self.stack[start..start + count])?;
+                        let value = target.load_index_deep(&self.stack[start..start + count]);
                         
                         for i in 0..count {
                             self.stack[start + i] = Value::Void;
@@ -374,7 +365,7 @@ impl<'a> VM {
                     } else {
                         let index = self.pop();
                         let value = self.pop();
-                        value.load_index(&index)?
+                        value.load_index(&index)
                     };
                     self.push(res); 
                 }
@@ -388,9 +379,6 @@ impl<'a> VM {
                 Op::LoadLocal(idx, depth_delta) => {
                     let base = self.get_frame_base(*depth_delta);
                     let index = base + idx;
-                    if index >= self.fp {
-                        return Err(VMError::EmptyStack);
-                    }
                     self.push(unsafe { self.frame.get_unchecked(index) }.clone());
                 }
 
@@ -415,9 +403,7 @@ impl<'a> VM {
                     match func_val {
                         Value::Number(func) => {
                             self.sp -= *n; 
-            
-                            self.run_func(func, *n, code)?; 
-                            
+                            self.run_func(func, *n, code); 
                             if *n > 1 {
                                 for i in 0..(*n - 1) {
                                     unsafe { *self.stack.get_unchecked_mut(self.sp + i) = Value::Void; }
@@ -461,12 +447,12 @@ impl<'a> VM {
                             ip_ptr = unsafe { base_ptr.add(target_ip as usize) };
                             continue;
                         }     
-                        _ => return Err(VMError::FuncErr),
+                        _ => {}
                     }
                 }
                 Op::Return => {
                     let return_val = self.pop();
-                    let frame = self.call_stack.pop().ok_or(VMError::EmptyStack)?;
+                    let frame = self.call_stack.pop().unwrap();
                     
                     self.fp = self.now_frame;
                     self.now_frame = frame.old_frame;
@@ -483,7 +469,6 @@ impl<'a> VM {
             }
             ip_ptr = unsafe { ip_ptr.add(1) };
         }
-        Ok(())
     }
 
 }

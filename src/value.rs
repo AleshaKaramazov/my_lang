@@ -4,7 +4,6 @@ use std::rc::Rc;
 use std::vec::IntoIter;
 
 use crate::consts;
-use crate::errors::VMError;
 use crate::file::FileHandler;
 
 #[derive(Debug, Clone)]
@@ -175,8 +174,8 @@ impl std::io::Write for Value {
             else {
                 std::io::stdout().write(buf)
             }
-        } else if let Ok(u) = self.expect_number() {
-            match u {
+        } else if let Value::Number(i) = self {
+            match *i {
                 consts::STDERR => std::io::stderr().write(buf),
                 consts::STDOUT  => std::io::stdout().write(buf),
                 unk => Err(std::io::Error::other(format!("output by file descriptor is only for:\n\
@@ -209,32 +208,21 @@ impl Value {
         }
     }
 
-    pub fn eval_str(&self) -> Result<String, VMError> {
+    pub fn eval_str(&self) -> String {
         match self {
-            Self::Str(s) => Ok(s.borrow().to_string()),
-            _ => Err(VMError::UnExpectedType)
+            Self::Str(s) => s.borrow().to_string(),
+            _ => unreachable!()
         }
     }
 
-    pub fn open_file(filename: &str) -> Self {
-        Value::Result(Box::new(
-            FileHandler::new_file(filename)
-                .map(|x| Value::File(Box::new(x))).map_err(|_| Value::Str(Rc::new(RefCell::new(format!("error with open file: {}", filename)))))
-        ))
-    }
-
-    pub fn new_file(filename: &str, opt: i64) -> Result<Self, VMError> {
-        Ok(Value::File(Box::new(FileHandler::open(filename, opt)?)))
-    }
-    pub fn add_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn add_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a += b; Ok(()) }
-            (Value::Float(a), Value::Float(b)) => { *a += b; Ok(()) }
-            (Value::Float(a), Value::Number(b)) => { *a += b as f64; Ok(()) }
+            (Value::Number(a), Value::Number(b)) => { *a += b; }
+            (Value::Float(a), Value::Float(b)) => { *a += b; }
+            (Value::Float(a), Value::Number(b)) => { *a += b as f64; }
             (s @ Value::Number(_), Value::Float(b)) => {
-                let a = s.expect_number()?;
+                let a = s.expect_number();
                 *s = Value::Float(a as f64 + b);
-                Ok(())
             }
             (Value::Str(a), b) => {
                 let mut a = a.borrow_mut();
@@ -243,7 +231,6 @@ impl Value {
                     Value::Char(c) => a.push(c),
                     _ => a.push_str(&b.to_string()),
                 }
-                Ok(())
             }
             (s @ Value::Char(_), b) => {
                 let mut new_str = s.to_string();
@@ -253,120 +240,107 @@ impl Value {
                     _ => new_str.push_str(&b.to_string()),
                 }
                 *s = Value::Str(Rc::new(RefCell::new(new_str))); 
-                Ok(())
             }
             (s, Value::Str(b)) => {
                 let mut new_str = s.to_string();
                 new_str.push_str(&b.borrow());
                 *s = Value::Str(Rc::new(RefCell::new(new_str)));
-                Ok(())
             }
             (s, Value::Char(b)) => {
                 let mut new_str = s.to_string();
                 new_str.push(b);
                 *s = Value::Str(Rc::new(RefCell::new(new_str)));
-                Ok(())
             }
-            _ => Err(VMError::BadOperand),
+            _ => unreachable!()
         }
     }
 
-    pub fn sub_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn sub_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a -= b; Ok(()) }
-            (Value::Float(a), Value::Float(b)) => { *a -= b; Ok(()) }
-            (Value::Float(a), Value::Number(b)) => { *a -= b as f64; Ok(()) }
+            (Value::Number(a), Value::Number(b)) => { *a -= b; }
+            (Value::Float(a), Value::Float(b)) => { *a -= b; }
+            (Value::Float(a), Value::Number(b)) => { *a -= b as f64; }
             (s @ Value::Number(_), Value::Float(b)) => {
-                let a = s.expect_number()?;
+                let a = s.expect_number();
                 *s = Value::Float(a as f64 - b);
-                Ok(())
             }
-            _ => Err(VMError::BadOperand),
+            _ => unreachable!()
         }
     }
 
-    pub fn mul_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn mul_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a *= b; Ok(()) }
-            (Value::Float(a), Value::Float(b)) => { *a *= b; Ok(()) }
-            (Value::Float(a), Value::Number(b)) => { *a *= b as f64; Ok(()) }
+            (Value::Number(a), Value::Number(b)) => { *a *= b; }
+            (Value::Float(a), Value::Float(b)) => { *a *= b; }
+            (Value::Float(a), Value::Number(b)) => { *a *= b as f64; }
             (s @ Value::Number(_), Value::Float(b)) => {
-                let a = s.expect_number()?;
+                let a = s.expect_number();
                 *s = Value::Float(a as f64 * b);
-                Ok(())
             }
-            _ => Err(VMError::BadOperand),
+            _ => unreachable!()
         }
     }
 
-    pub fn div_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn div_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (_, Value::Number(0)) => Err(VMError::ZeroDiv),
-            (Value::Number(a), Value::Number(b)) => { *a /= b; Ok(()) }
-            (_, Value::Float(0.0)) => Err(VMError::ZeroDiv),
-            (Value::Float(a), Value::Float(b)) => { *a /= b; Ok(()) }
-            (Value::Float(a), Value::Number(b)) => { *a /= b as f64; Ok(()) }
+            (Value::Number(a), Value::Number(b)) => { *a /= b; }
+            (Value::Float(a), Value::Float(b)) => { *a /= b; }
+            (Value::Float(a), Value::Number(b)) => { *a /= b as f64; }
             (s @ Value::Number(_), Value::Float(b)) => {
-                let a = s.expect_number()?;
+                let a = s.expect_number();
                 *s = Value::Float(a as f64 / b);
-                Ok(())
             }
-            _ => Err(VMError::BadOperand),
+            _ => unreachable!()
         }
     }
 
-    pub fn arifm_and_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn arifm_and_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a &= b; Ok(()) }
-            _ => Err(VMError::NotOperation),
+            (Value::Number(a), Value::Number(b)) => { *a &= b;  }
+            _ => unreachable!(),
         }
     }
 
-    pub fn arifm_or_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn arifm_or_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a |= b; Ok(()) }
-            _ => Err(VMError::NotOperation),
+            (Value::Number(a), Value::Number(b)) => { *a |= b; }
+            _ => unreachable!()
         }
     }
 
-    pub fn arifm_mod_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn arifm_mod_assign(&mut self, rhs: Self) {
         match (self, rhs) {
-            (Value::Number(a), Value::Number(b)) => { *a %= b; Ok(()) }
-            _ => Err(VMError::NotOperation),
+            (Value::Number(a), Value::Number(b)) => { *a %= b; }
+            _ => unreachable!()
         }
     }
 
-    pub fn pow_assign(&mut self, rhs: Self) -> Result<(), VMError> {
+    pub fn pow_assign(&mut self, rhs: Self) {
         match (self, rhs) {
             (Value::Number(a), Value::Number(b)) => {
-                if b < 0 {
-                    Err(VMError::BadOperand)
-                } else {
-                    *a = a.pow(b as u32);
-                    Ok(())
-                }
+                *a = a.pow(b as u32);
             }
-            _ => Err(VMError::NotOperation),
+            _ => unreachable!()
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<Value>, VMError> {
+    pub fn next(&mut self) -> Option<Value> {
         match self {
-            Value::Iter(i) => Ok(i.next()),
-            _ => Err(VMError::CantIter)
+            Value::Iter(i) => i.next(),
+            _ => unreachable!()
         }
     }
 
-    pub fn expect_number(&self) -> Result<i64, VMError> {
+    pub fn expect_number(&self) -> i64 {
         match self {
-            Self::Number(i) => Ok(*i),
-            _ => Err(VMError::UnExpectedType)
+            Self::Number(i) => *i,
+            _ => unreachable!() 
         }
     }
 
-    pub fn make_range(start: Value, end: Value, incl: bool) -> Result<Value, VMError> {
-        let start = start.expect_number()?;
-        let mut end = end.expect_number()?;
+    pub fn make_range(start: Value, end: Value, incl: bool) -> Value {
+        let start = start.expect_number();
+        let mut end = end.expect_number();
         if incl {
             if start > end {
                 end -= 1;
@@ -374,7 +348,7 @@ impl Value {
                 end += 1; 
             }
         }
-        Ok(Value::Iter(Box::new(Iterator::Range(Range { start, end, step: if start > end {-1} else {1} }))))
+        Value::Iter(Box::new(Iterator::Range(Range { start, end, step: if start > end {-1} else {1} })))
     }
 
     pub fn new_control(res: Result<Value, String>) -> Value {
@@ -384,33 +358,30 @@ impl Value {
         }))
     }
 
-    pub fn make_iter(self) -> Result<Iterator, VMError> {
-        let val = match self {
+    pub fn make_iter(self) -> Iterator {
+        match self {
             Self::Str(s) => {
                 let iter = s.borrow().chars().collect::<Vec<char>>().into_iter();
                 Iterator::String(iter)
             }
             Self::Iter(i) => *i,
             Self::Set(i) => Iterator::Set(i.borrow().clone().into_iter()),
-            _ => return Err(VMError::UnExpectedType),
-        };
-
-        Ok(val)
+            _ => unreachable!()
+        }
     }
 
-    pub fn set_index(&mut self, index: Self, to_set: Value) -> Result<(), VMError> {
-        let index = index.expect_number()? as usize;
+    pub fn set_index(&mut self, index: Self, to_set: Value) {
+        let index = index.expect_number() as usize;
         match self {
             Value::Set(v) => {
                 v.borrow_mut()[index] = to_set;
             }
-            _ => return Err(VMError::CantIndex)
+            _ => unreachable!()
         }
-        Ok(())
     }
 
-    pub fn load_dyap(&self, start: usize, end: usize) -> Result<Value, VMError> {
-        let res = match self {
+    pub fn load_dyap(&self, start: usize, end: usize) -> Value {
+        match self {
             Value::Set(s) => {
                 let s = s.borrow();
                 let end = if end > s.len() {s.len()} else {end};
@@ -422,9 +393,8 @@ impl Value {
                 let end = if end > count {count} else {end};
                 Value::Str(Rc::new(RefCell::new(s[start..end].to_string())))
             }
-            _ => return Err(VMError::UnExpectedType),
-        };
-        Ok(res)
+            _ => unreachable!()
+        }
     }
 
     pub fn new_str<S: Into<String>>(str: S) -> Self {
@@ -432,50 +402,43 @@ impl Value {
     }
 
     
-    pub fn set_index_deep(&mut self, index: &[Self], to_set: Value) -> Result<(), VMError> {
+    pub fn set_index_deep(&mut self, index: &[Self], to_set: Value) {
         let mut current_rc = match self {
             Value::Set(v) => v.clone(),
-            _ => return Err(VMError::CantIndex),
+            _ => unreachable!()
         };
 
         for item in index.iter().take(index.len() - 1) {
-            let idx = item.expect_number()? as usize;
+            let idx = item.expect_number() as usize;
 
             let next_rc = match &current_rc.borrow()[idx] {
                 Value::Set(next_v) => next_v.clone(),
-                _ => return Err(VMError::CantIndex),
+                _ => unreachable!()
             };
             
             current_rc = next_rc;
         }
-        let last_idx = index.last().ok_or(VMError::CantIndex)?.expect_number()? as usize;
+        let last_idx = index.last().unwrap().expect_number() as usize;
         current_rc.borrow_mut()[last_idx] = to_set;
-
-        Ok(())
     }
 
 
-    pub fn load_index_deep(&self, index: &[Self]) -> Result<Value, VMError> {
+    pub fn load_index_deep(&self, index: &[Self]) -> Value {
         let mut current = self.clone();
 
         for i in index.iter() {
-            current = current.load_index(i)?.clone();
+            current = current.load_index(i).clone();
         }
-        Ok(current.clone())
+        current.clone()
     }
 
     
-    pub fn load_index(&self, index: &Self) -> Result<Value, VMError> {
-        let val = match index {
+    pub fn load_index(&self, index: &Self) -> Value {
+        match index {
             Value::Iter(i) => {
                 if let Iterator::Range(r) = &**i {
-                    if r.start < 0 || r.end < 0 || r.step < 0 || r.start > r.end {
-                        return Err(VMError::CantIndex)
-                    } 
-                    self.load_dyap(r.start as usize, r.end as usize)?
-                } else {
-                    return Err(VMError::CantIndex)
-                }
+                    self.load_dyap(r.start as usize, r.end as usize)
+                } else {unreachable!()}
             } 
             Value::Number(i) => {
                 match self {
@@ -488,12 +451,11 @@ impl Value {
                         let index = i.rem_euclid(s.chars().count() as i64) as usize;
                         s.chars().nth(index).map(Value::Char).unwrap()
                     }
-                    _ => return Err(VMError::CantIndex)
+                    _ => unreachable!()
                 }
             }
-            _ => return Err(VMError::CantIndex)
-        };
-        Ok(val)
+            _ => unreachable!()
+        }
     }
 
 }

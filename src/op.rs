@@ -10,7 +10,7 @@ pub enum Op<'a> {
     Pop,
     Dup,
     MakeTuple(usize),   
-    UnpackTuple(usize),
+    UnpackTuple,
     DupTarget(usize),
     PushFn(usize),
     MakeRange(bool),
